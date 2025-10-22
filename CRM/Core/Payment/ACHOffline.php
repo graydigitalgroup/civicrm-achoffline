@@ -1,6 +1,7 @@
 <?php
 
 use Civi\Api4\BankAccount;
+use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
 
 /**
@@ -90,6 +91,22 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     return TRUE;
   }
 
+  /**
+   * Get name for the payment information type.
+   * @return string
+   */
+  public function getPaymentTypeName() {
+    return 'ach';
+  }
+
+  /**
+   * Get label for the payment information type.
+   * @return string
+   */
+  public function getPaymentTypeLabel() {
+    return ts('ACH');
+  }
+
   /*
    * This function  sends request and receives response from
    * the processor. It is the main function for processing on-server
@@ -120,8 +137,14 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
 
     if (!empty($propertyBag->getCustomProperty('bank_account_number')) && !empty($propertyBag->getCustomProperty('bank_identification_number'))) {
       $contact_id = $propertyBag->getContactID();
+      $contact = Contact::get(FALSE)
+        ->addWhere('id', '=', $contact_id)
+        ->execute()
+        ->first();
+      $account_name = $propertyBag->getCustomProperty('bank_name') ?? $contact['display_name'] . ' Bank Account';
       $bank_account_id = BankAccount::create(FALSE)
         ->addValue('contact_id', $contact_id)
+        ->addValue('name', $account_name)
         ->addValue('account_number', $propertyBag->getCustomProperty('bank_account_number'))
         ->addValue('routing_number', $propertyBag->getCustomProperty('bank_identification_number'))
         ->execute()
@@ -134,6 +157,9 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
         ->addValue('ACH_Processor_Data.Bank_Account', $bank_account_id)
         ->execute();
     }
+
+    // Need to add options on contribution form to allow for selecting an
+    // existing Bank Account for the contact the contribution is being created for.
 
     $query_args = [];
 
