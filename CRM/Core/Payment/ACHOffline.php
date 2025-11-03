@@ -3,6 +3,7 @@
 use Civi\Api4\BankAccount;
 use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
+use Civi\Payment\Exception\PaymentProcessorException;
 
 /**
  * Placeholder clas for offline recurring payments.
@@ -161,7 +162,126 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     // Need to add options on contribution form to allow for selecting an
     // existing Bank Account for the contact the contribution is being created for.
 
-    $query_args = [];
+    $query_args = [
+      // C - Direct Payment using credit card.
+      'TENDER' => 'C',
+      // A - Authorization, S - Sale.
+      'TRXTYPE' => 'S',
+      'ACCT' => '',
+      'ACCTTYPE' => urlencode($paymentParams['credit_card_type']),
+      // @todo Do we need to machinemoney format? ie. 1024.00 or is 1024 ok for API?
+      'AMT' => \Civi::format()->machineMoney($propertyBag->getAmount()),
+      'CURRENCY' => urlencode($propertyBag->getCurrency()),
+      'FIRSTNAME' => $propertyBag->has('firstName') ? $propertyBag->getFirstName() : '',
+      'LASTNAME' => $propertyBag->has('lastName') ? $propertyBag->getLastName() : '',
+      'STREET' => $propertyBag->getBillingStreetAddress(),
+      'CITY' => urlencode($propertyBag->getBillingCity()),
+      'STATE' => urlencode($propertyBag->getBillingStateProvince()),
+      'ZIP' => urlencode($propertyBag->getBillingPostalCode()),
+      'COUNTRY' => urlencode($propertyBag->getBillingCountry()),
+      'EMAIL' => $propertyBag->has('email') ? $propertyBag->getEmail() : '',
+      'CUSTIP' => urlencode($paymentParams['ip_address']),
+      'COMMENT1' => urlencode($paymentParams['contributionType_accounting_code']),
+      'COMMENT2' => $this->_paymentProcessor['is_test'] ? 'test' : 'live',
+      'INVNUM' => urlencode($propertyBag->getInvoiceID()),
+      'ORDERDESC' => urlencode($propertyBag->getDescription()),
+      'VERBOSITY' => 'MEDIUM',
+      'BILLTOCOUNTRY' => urlencode($propertyBag->getBillingCountry()),
+    ];
+
+    // Check for selected bank account.
+    if ($propertyBag->has('bankAccount') && !empty($propertyBag->getCustomProperty('bankAccount'))) {
+      $query_args['ACCT'] = $propertyBag->getCustomProperty('bankAccount');
+    }
+
+    if ($paymentParams['installments'] == 1) {
+      $paymentParams['is_recur'] = FALSE;
+    }
+
+    if ($paymentParams['is_recur'] == TRUE) {
+
+      $query_args['TRXTYPE'] = 'R';
+      $query_args['OPTIONALTRX'] = 'S';
+      // @todo Do we need to machinemoney format? ie. 1024.00 or is 1024 ok for API?
+      $query_args['OPTIONALTRXAMT'] = \Civi::format()->machineMoney($propertyBag->getAmount());
+      // Amount of the initial Transaction. Required.
+      $query_args['ACTION'] = 'A';
+      // A for add recurring (M-modify,C-cancel,R-reactivate,I-inquiry,P-payment.
+      $query_args['PROFILENAME'] = urlencode('RegularContribution');
+      // A for add recurring (M-modify,C-cancel,R-reactivate,I-inquiry,P-payment.
+      if ($paymentParams['installments'] > 0) {
+        $query_args['TERM'] = $propertyBag->getRecurInstallments() - 1;
+        // ie. in addition to the one happening with this transaction.
+      }
+      if ($propertyBag->getRecurFrequencyUnit() === 'day') {
+        throw new PaymentProcessorException('Current implementation does not support recurring with frequency "day"');
+      }
+      $interval = $propertyBag->getRecurFrequencyInterval() . " " . $propertyBag->getRecurFrequencyUnit();
+      switch ($interval) {
+        case '1 week':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m"), date("d") + 7, date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m"), date("d") + (7 * $query_args['TERM']), date("Y"));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "WEEK";
+          $propertyBag->setRecurFrequencyUnit('week');
+          $propertyBag->setRecurFrequencyInterval(1);
+          break;
+
+        case '2 weeks':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m"), date("d") + 14, date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m"), date("d") + (14 * $query_args['TERM']), date("Y "));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "BIWK";
+          $propertyBag->setRecurFrequencyUnit('week');
+          $propertyBag->setRecurFrequencyInterval(2);
+          break;
+
+        case '4 weeks':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m"), date("d") + 28, date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m"), date("d") + (28 * $query_args['TERM']), date("Y"));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "FRWK";
+          $propertyBag->setRecurFrequencyUnit('week');
+          $propertyBag->setRecurFrequencyInterval(4);
+          break;
+
+        case '1 month':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m") + 1, date("d"), date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m") + (1 * $query_args['TERM']), date("d"), date("Y"));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "MONT";
+          $propertyBag->setRecurFrequencyUnit('month');
+          $propertyBag->setRecurFrequencyInterval(1);
+          break;
+
+        case '3 months':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m") + 3, date("d"), date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m") + (3 * $query_args['TERM']), date("d"), date("Y"));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "QTER";
+          $propertyBag->setRecurFrequencyUnit('month');
+          $propertyBag->setRecurFrequencyInterval(3);
+          break;
+
+        case '6 months':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m") + 6, date("d"), date("Y"));
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m") + (6 * $query_args['TERM']), date("d"), date("Y"));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "SMYR";
+          $propertyBag->setRecurFrequencyUnit('month');
+          $propertyBag->setRecurFrequencyInterval(6);
+          break;
+
+        case '1 year':
+          $paymentParams['next_sched_contribution_date'] = mktime(0, 0, 0, date("m"), date("d"), date("Y") + 1);
+          $paymentParams['end_date'] = mktime(0, 0, 0, date("m"), date("d"), date("Y") + (1 * $query_args['TEM']));
+          $query_args['START'] = date('mdY', $paymentParams['next_sched_contribution_date']);
+          $query_args['PAYPERIOD'] = "YEAR";
+          $propertyBag->setRecurFrequencyUnit('year');
+          $propertyBag->setRecurFrequencyInterval(1);
+          break;
+      }
+    }
 
     CRM_Utils_Hook::alterPaymentProcessorParams($this, $propertyBag, $query_args);
 
