@@ -50,5 +50,5 @@
     <mixin>smarty@1.0.3</mixin>
     <mixin>entity-types-php@2.0.0</mixin>
   </mixins>
-  <upgrader>CiviMix\Schema\ACHOffline\AutomaticUpgrader</upgrader>
+  <upgrader>CRM_ACHOffline_Upgrader</upgrader>
 </extension>
