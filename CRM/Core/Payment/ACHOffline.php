@@ -3,7 +3,10 @@
 use Civi\Api4\BankAccount;
 use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
+use Civi\Api4\ContributionRecur;
+use Civi\Api4\PaymentToken;
 use Civi\Payment\Exception\PaymentProcessorException;
+use CRM_ACHOffline_ExtensionUtil as E;
 
 /**
  * Placeholder clas for offline recurring payments.
@@ -11,6 +14,8 @@ use Civi\Payment\Exception\PaymentProcessorException;
 class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
 
   use CRM_Core_Payment_MJWTrait;
+
+  protected $cid;
 
   /**
    * Constructor.
@@ -25,10 +30,50 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   }
 
   /**
+   * Get array of fields that should be displayed on the payment form for ACH/EFT (badly named as debit cards).
+   *
+   * @return array
+   */
+
+  protected function getDirectDebitFormFields(): array {
+    $fields = parent::getDirectDebitFormFields();
+    if ($fields[0] == 'account_holder') {
+      array_shift($fields);
+      $fields[] = 'account_holder';
+    }
+    $fields[] = 'bank_account_type';
+    return $fields;
+  }
+
+  /**
    *
    */
   public function getPaymentFormFields() {
-    return ['bank_name', 'bank_account_number', 'bank_identification_number'];
+    return ['bank_name', 'account_holder', 'bank_account_number', 'bank_identification_number', 'bank_account_type'];
+  }
+
+  /**
+   * Return an array of all the details about the fields potentially required for payment fields.
+   *
+   * Only those determined by getPaymentFormFields will actually be assigned to the form
+   *
+   * @return array
+   *   field metadata
+   */
+  public function getPaymentFormFieldsMetadata(): array {
+    $metadata = parent::getPaymentFormFieldsMetadata();
+    $metadata['bank_account_type'] = [
+      'htmlType' => 'Select',
+      'name' => 'bank_account_type',
+      'title' => ts('Account type'),
+      'is_required' => TRUE,
+      'attributes' => ['CHECKING' => 'Checking', 'SAVING' => 'Savings'],
+    ];
+    // Modify the label of Account Number
+    $metadata['bank_account_number']['title'] = ts('Account No.');
+    // Modify the label of Bank Identification Number
+    $metadata['bank_identification_number']['title'] = ts('Routing No.');
+    return $metadata;
   }
 
   /**
@@ -108,6 +153,43 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     return ts('ACH');
   }
 
+
+  /**
+   * Set default values when loading the (payment) form
+   *
+   * @param \CRM_Core_Form $form
+   */
+  public function buildForm(&$form) {
+    // Get any saved accounts for the current contact
+    // and put them on the payment form with a select element so you can
+    // select "none" to enter new details or a saved account to use an existing one.
+    CRM_Core_Region::instance('billing-block-pre')->add([
+      'template' => E::path('templates/CRM/Core/BillingBlockACHOffline.tpl'),
+      'weight' => -1,
+    ]);
+
+    $cid = \CRM_Utils_Request::retrieve('cid', 'Positive', NULL);
+
+    if (empty($cid)) {
+      // Can't save account details if no contact ID.
+      return FALSE;
+    }
+
+    $accounts = BankAccount::get(FALSE)
+      ->setSelect(['id', 'name', 'payment_token'])
+      ->addWhere('contact_id', '=', $cid)
+      ->addChain('payment_token', PaymentToken::get(FALSE)->addSelect('id')->addWhere('token', '=', '$payment_token'))
+      ->execute();
+    foreach ($accounts as $account) {
+      $bankAccounts[$account['payment_token'][0]['id']] = $account['name'];
+    }
+    if (!empty($bankAccounts)) {
+      $form->add('select', 'payment_token', E::ts('Use Existing Bank Account'),
+       ['0' => E::ts('- none -')] + $bankAccounts, FALSE);
+    }
+    return FALSE;
+  }
+
   /*
    * This function  sends request and receives response from
    * the processor. It is the main function for processing on-server
@@ -136,29 +218,6 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       return $zeroAmountPayment;
     }
 
-    if (!empty($propertyBag->getCustomProperty('bank_account_number')) && !empty($propertyBag->getCustomProperty('bank_identification_number'))) {
-      $contact_id = $propertyBag->getContactID();
-      $contact = Contact::get(FALSE)
-        ->addWhere('id', '=', $contact_id)
-        ->execute()
-        ->first();
-      $account_name = $propertyBag->getCustomProperty('bank_name') ?? $contact['display_name'] . ' Bank Account';
-      $bank_account_id = BankAccount::create(FALSE)
-        ->addValue('contact_id', $contact_id)
-        ->addValue('name', $account_name)
-        ->addValue('account_number', $propertyBag->getCustomProperty('bank_account_number'))
-        ->addValue('routing_number', $propertyBag->getCustomProperty('bank_identification_number'))
-        ->execute()
-        ->first()['id'];
-
-
-      // Need to set the ACH information for the API.
-      Contribution::update(FALSE)
-        ->addWhere('id', '=', $propertyBag->getContributionID())
-        ->addValue('ACH_Processor_Data.Bank_Account', $bank_account_id)
-        ->execute();
-    }
-
     // Need to add options on contribution form to allow for selecting an
     // existing Bank Account for the contact the contribution is being created for.
 
@@ -168,7 +227,8 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       // A - Authorization, S - Sale.
       'TRXTYPE' => 'S',
       'ACCT' => '',
-      'ACCTTYPE' => urlencode($paymentParams['credit_card_type']),
+      'ACCTTYPE' => 'ACH',
+      'TOKEN' => '',
       // @todo Do we need to machinemoney format? ie. 1024.00 or is 1024 ok for API?
       'AMT' => \Civi::format()->machineMoney($propertyBag->getAmount()),
       'CURRENCY' => urlencode($propertyBag->getCurrency()),
@@ -191,14 +251,58 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
 
     // Check for selected bank account.
     if ($propertyBag->has('bankAccount') && !empty($propertyBag->getCustomProperty('bankAccount'))) {
-      $query_args['ACCT'] = $propertyBag->getCustomProperty('bankAccount');
+      $query_args['TOKEN'] = $propertyBag->getCustomProperty('bankAccount');
+      $payment_token = PaymentToken::get(FALSE)
+        ->addSelect('masked_account_number')
+        ->addWhere('id', '=', $query_args['TOKEN'])
+        ->execute()
+        ->first();
+      $query_args['ACCT'] = $payment_token['masked_account_number'];
+    } else {
+      if (!empty($propertyBag->getCustomProperty('bank_account_number')) && !empty($propertyBag->getCustomProperty('bank_identification_number'))) {
+        $contact_id = $propertyBag->getContactID();
+        $contact = Contact::get(FALSE)
+          ->addWhere('id', '=', $contact_id)
+          ->execute()
+          ->first();
+        $account_name = $propertyBag->getCustomProperty('bank_name') ?? $contact['display_name'] . ' Bank Account';
+        $payment_token = \CRM_Contribute_BAO_Contribution::generateInvoiceID();
+        BankAccount::create(FALSE)
+          ->addValue('contact_id', $contact_id)
+          ->addValue('name', $account_name)
+          ->addValue('account_number', \Civi::service('crypto.token')->encrypt($propertyBag->getCustomProperty('bank_account_number'), 'CRED'))
+          ->addValue('routing_number', \Civi::service('crypto.token')->encrypt($propertyBag->getCustomProperty('bank_identification_number'), 'CRED'))
+          ->addValue('account_holder', $propertyBag->getCustomProperty('account_holder'))
+          ->addValue('account_type', $propertyBag->getCustomProperty('bank_account_type'))
+          ->addValue('payment_token', $payment_token)
+          ->execute()
+          ->first()['id'];
+
+        // Set
+        $payment_token = PaymentToken::create(FALSE)
+          ->addValue('contact_id', $propertyBag->getContactID())
+          ->addValue('payment_processor_id', $this->getPaymentProcessor()['id'])
+          ->addValue('token', $payment_token)
+          ->addValue('masked_account_number', CRM_Utils_System::mungeCreditCard($propertyBag->getCustomProperty('bank_account_number')))
+          ->execute();
+        $query_args['TOKEN'] = $payment_token[0]['id'];
+        $query_args['ACCT'] = $payment_token[0]['masked_account_number'];
+      } else {
+        // No payment information is present.
+        throw new PaymentProcessorException('Invalid ACH payment information. Please re-enter.', 1000);
+      }
     }
 
     if ($paymentParams['installments'] == 1) {
       $paymentParams['is_recur'] = FALSE;
     }
 
-    if ($paymentParams['is_recur'] == TRUE) {
+    if ($paymentParams['is_recur'] == TRUE && !empty($query_args['TOKEN'])) {
+      // Store the payment token ID on the recur.
+      ContributionRecur::update(FALSE)
+        ->addWhere('id', '=', $propertyBag->getContributionRecurID())
+        ->addValue('payment_token_id', $query_args['TOKEN'])
+        ->execute();
 
       $query_args['TRXTYPE'] = 'R';
       $query_args['OPTIONALTRX'] = 'S';
