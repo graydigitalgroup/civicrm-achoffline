@@ -84,12 +84,11 @@ return [
       'sql_type' => 'int unsigned',
       'input_type' => 'EntityRef',
       'required' => TRUE,
-      'description' => E::ts('FK to contact owning this account'),
-      'add' => '4.3',
+      'description' => E::ts('Contact ID'),
       'entity_reference' => [
         'entity' => 'Contact',
         'key' => 'id',
-        'on_delete' => 'SET NULL',
+        'on_delete' => 'CASCADE',
       ],
     ],
     'payment_token' => [
