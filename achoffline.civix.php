@@ -7,9 +7,9 @@
  * extension.
  */
 class CRM_ACHOffline_ExtensionUtil {
-  const SHORT_NAME = 'ACHOffline';
-  const LONG_NAME = 'ACHOffline';
-  const CLASS_PREFIX = 'CRM_Achoffline';
+  const SHORT_NAME = 'achoffline';
+  const LONG_NAME = 'achoffline';
+  const CLASS_PREFIX = 'CRM_ACHOffline';
 
   /**
    * Translate a string using the extension's domain.
