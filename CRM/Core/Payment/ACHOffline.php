@@ -1,5 +1,10 @@
 <?php
 
+use Brick\Math\RoundingMode;
+use Brick\Money\Money;
+use Civi\AfformPayment\AfformPaymentProcessorInterface;
+use Civi\AfformPayment\CheckoutSession;
+use Civi\AfformPayment\PaymentProcessorUtils;
 use Civi\Api4\BankAccount;
 use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
@@ -11,7 +16,7 @@ use CRM_ACHOffline_ExtensionUtil as E;
 /**
  * Placeholder clas for offline recurring payments.
  */
-class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
+class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment implements AfformPaymentProcessorInterface {
 
   use CRM_Core_Payment_MJWTrait;
 
@@ -30,11 +35,37 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   }
 
   /**
+   * @inheritdoc
+   */
+  public function supportsContributionPages(): bool {
+    return FALSE;
+  }
+
+  /**
+   * @inheritdoc
+   */
+  public function supportsAfformPayments(): bool {
+    return TRUE;
+  }
+
+
+  public function getAfformModule(): string {
+    return 'afACHOffline';
+  }
+
+  public function getAfformConfig(): array {
+    return [
+      'module' => 'afACHOffline',
+      'template' => '~/afACHOffline/achoffline.html',
+    ];
+  }
+
+
+  /**
    * Get array of fields that should be displayed on the payment form for ACH/EFT (badly named as debit cards).
    *
    * @return array
    */
-
   protected function getDirectDebitFormFields(): array {
     $fields = parent::getDirectDebitFormFields();
     if ($fields[0] == 'account_holder') {
@@ -65,14 +96,14 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     $metadata['bank_account_type'] = [
       'htmlType' => 'Select',
       'name' => 'bank_account_type',
-      'title' => ts('Account type'),
+      'title' => E::ts('Account type'),
       'is_required' => TRUE,
       'attributes' => ['CHECKING' => 'Checking', 'SAVING' => 'Savings'],
     ];
     // Modify the label of Account Number
-    $metadata['bank_account_number']['title'] = ts('Account No.');
+    $metadata['bank_account_number']['title'] = E::ts('Account No.');
     // Modify the label of Bank Identification Number
-    $metadata['bank_identification_number']['title'] = ts('Routing No.');
+    $metadata['bank_identification_number']['title'] = E::ts('Routing No.');
     return $metadata;
   }
 
@@ -150,9 +181,32 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    * @return string
    */
   public function getPaymentTypeLabel() {
-    return ts('ACH');
+    return E::ts('ACH');
   }
+  /**
+   * @inheritdoc
+   *
+   * Note: this is a copy of base implementation on CRM_Core_Payment in https://github.com/civicrm/civicrm-core/pull/33096
+   *
+   * This allows testing without the core PR
+   */
+  public function startCheckout(CheckoutSession $session): void {
+    $contributionId = $session->getContributionId();
+    $contribution = \Civi\Api4\Contribution::get(FALSE)
+      ->addWhere('id', '=', $contributionId)
+      ->addSelect('contact_id', 'invoice_id', 'SUM(total_amount) AS amount', 'currency')
+      ->execute()
+      ->single();
+    $paymentParams = array_merge($session->getPaymentParams(), $contribution);
+    $submitEventParams = [];
+    if (!empty(\Civi::$statics['Civi\Mjwshared\AfformPayments'])) {
+      $submitEventParams = \Civi::$statics['Civi\Mjwshared\AfformPayments'];
+    }
 
+    $payment = $this->doPayment($paymentParams);
+
+    $session->setSubmitResponseItem('achoffline', []);
+  }
 
   /**
    * Set default values when loading the (payment) form
@@ -222,31 +276,25 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     // existing Bank Account for the contact the contribution is being created for.
 
     $query_args = [
-      // C - Direct Payment using credit card.
-      'TENDER' => 'C',
-      // A - Authorization, S - Sale.
-      'TRXTYPE' => 'S',
       'ACCT' => '',
       'ACCTTYPE' => 'ACH',
       'TOKEN' => '',
-      // @todo Do we need to machinemoney format? ie. 1024.00 or is 1024 ok for API?
       'AMT' => \Civi::format()->machineMoney($propertyBag->getAmount()),
       'CURRENCY' => urlencode($propertyBag->getCurrency()),
       'FIRSTNAME' => $propertyBag->has('firstName') ? $propertyBag->getFirstName() : '',
       'LASTNAME' => $propertyBag->has('lastName') ? $propertyBag->getLastName() : '',
-      'STREET' => $propertyBag->getBillingStreetAddress(),
-      'CITY' => urlencode($propertyBag->getBillingCity()),
-      'STATE' => urlencode($propertyBag->getBillingStateProvince()),
-      'ZIP' => urlencode($propertyBag->getBillingPostalCode()),
-      'COUNTRY' => urlencode($propertyBag->getBillingCountry()),
+      'STREET' => $propertyBag->has('billingStreetAddress') ? $propertyBag->getBillingStreetAddress() : NULL,
+      'CITY' => $propertyBag->has('billingCity') ? urlencode($propertyBag->getBillingCity()) : NULL,
+      'STATE' => $propertyBag->has('billingStateProvince') ? urlencode($propertyBag->getBillingStateProvince()) : NULL,
+      'ZIP' => $propertyBag->has('billingPostalCode') ? urlencode($propertyBag->getBillingPostalCode()) : NULL,
+      'COUNTRY' => $propertyBag->has('billingCountry') ? urlencode($propertyBag->getBillingCountry()) : NULL,
       'EMAIL' => $propertyBag->has('email') ? $propertyBag->getEmail() : '',
-      'CUSTIP' => urlencode($paymentParams['ip_address']),
-      'COMMENT1' => urlencode($paymentParams['contributionType_accounting_code']),
+      'CUSTIP' => !empty($paymentParams['ip_address']) ? urlencode($paymentParams['ip_address']) : NULL,
+      'COMMENT1' => !empty($paymentParams['contributionType_accounting_code']) ? urlencode($paymentParams['contributionType_accounting_code']) : NULL,
       'COMMENT2' => $this->_paymentProcessor['is_test'] ? 'test' : 'live',
-      'INVNUM' => urlencode($propertyBag->getInvoiceID()),
-      'ORDERDESC' => urlencode($propertyBag->getDescription()),
-      'VERBOSITY' => 'MEDIUM',
-      'BILLTOCOUNTRY' => urlencode($propertyBag->getBillingCountry()),
+      'INVNUM' => $propertyBag->has('invoiceID') ? urlencode($propertyBag->getInvoiceID()) : NULL,
+      'ORDERDESC' => $propertyBag->has('description') ? urlencode($propertyBag->getDescription()) : NULL,
+      'BILLTOCOUNTRY' => $propertyBag->has('billingCountry') ? urlencode($propertyBag->getBillingCountry()) : NULL,
     ];
 
     // Check for selected bank account.
@@ -297,22 +345,13 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       $paymentParams['is_recur'] = FALSE;
     }
 
-    if ($paymentParams['is_recur'] == TRUE && !empty($query_args['TOKEN'])) {
+    if ($paymentParams['is_recur'] && !empty($query_args['TOKEN'])) {
       // Store the payment token ID on the recur.
       ContributionRecur::update(FALSE)
         ->addWhere('id', '=', $propertyBag->getContributionRecurID())
         ->addValue('payment_token_id', $query_args['TOKEN'])
         ->execute();
 
-      $query_args['TRXTYPE'] = 'R';
-      $query_args['OPTIONALTRX'] = 'S';
-      // @todo Do we need to machinemoney format? ie. 1024.00 or is 1024 ok for API?
-      $query_args['OPTIONALTRXAMT'] = \Civi::format()->machineMoney($propertyBag->getAmount());
-      // Amount of the initial Transaction. Required.
-      $query_args['ACTION'] = 'A';
-      // A for add recurring (M-modify,C-cancel,R-reactivate,I-inquiry,P-payment.
-      $query_args['PROFILENAME'] = urlencode('RegularContribution');
-      // A for add recurring (M-modify,C-cancel,R-reactivate,I-inquiry,P-payment.
       if ($paymentParams['installments'] > 0) {
         $query_args['TERM'] = $propertyBag->getRecurInstallments() - 1;
         // ie. in addition to the one happening with this transaction.
@@ -397,8 +436,8 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    *
    */
   public function changeSubscriptionAmount(&$message = '', $params = []) {
-    $userAlert = ts('You have updated the amount of this recurring contribution.');
-    CRM_Core_Session::setStatus($userAlert, ts('Warning'), 'alert');
+    $userAlert = E::ts('You have updated the amount of this recurring contribution.');
+    CRM_Core_Session::setStatus($userAlert, E::ts('Warning'), 'alert');
     return TRUE;
   }
 
@@ -406,8 +445,8 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    *
    */
   public function cancelSubscription(&$message = '', $params = []) {
-    $userAlert = ts('You have cancelled this recurring contribution.');
-    CRM_Core_Session::setStatus($userAlert, ts('Warning'), 'alert');
+    $userAlert = E::ts('You have cancelled this recurring contribution.');
+    CRM_Core_Session::setStatus($userAlert, E::ts('Warning'), 'alert');
     return TRUE;
   }
 
@@ -419,5 +458,42 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   public function checkConfig() {
     return NULL;
   }
+
+  public function continueCheckout(CheckoutSession $session): void {
+    // TODO: Implement continueCheckout() method.
+  }
+
+  /**
+   * Fetch line items for a contribution and parse into an array suitable
+   * for passing to Stripe Checkout
+   * @param array $contribution the details on the contribution record (using Api4 keys)
+   *
+   * @return array
+   * @throws \Brick\Money\Exception\UnknownCurrencyException
+   */
+  protected function getLineItems(array $contribution) {
+    $lineItems = PaymentProcessorUtils::fetchLineItems($contribution['id']);
+    $currency = $contribution['currency'];
+    $invoiceId = $contribution['invoice_id'];
+
+    return array_map(function ($lineItem) use ($currency, $invoiceId) {
+      $lineItemLabel = $lineItem['price_field_id:label'] ?: E::ts('CiviCRM Contribution');
+      $lineItemDescription = $lineItem['price_field_value_id:label'] ?: E::ts('Invoice ID %1', [1 => $invoiceId]);
+
+      $amount = $lineItem['unit_price'] + ($lineItem['tax_amount'] ?? 0);
+      return [
+        'price_data' => [
+          'currency' => $currency,
+          'unit_amount' => Money::of($amount, $currency, NULL, RoundingMode::HALF_UP)->getMinorAmount()->getIntegralPart(),
+          'product_data' => [
+            'name' => $lineItemLabel,
+            'description' => $lineItemDescription,
+          ],
+        ],
+        'quantity' => $lineItem['qty'],
+      ];
+    }, $lineItems);
+  }
+
 
 }

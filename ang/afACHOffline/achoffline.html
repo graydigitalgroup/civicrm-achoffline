@@ -1,0 +1,25 @@
+<fieldset class="af-ach-offline-params">
+  <div class="form-group">
+    <label>Bank Name</label>
+    <input type="text" name='bank_name' ng-model="$ctrl.payment_params.bank_name" required="true">
+  </div>
+  <div class="form-group">
+    <label>Account Holder</label>
+    <input type="text" name='account_holder' ng-model="$ctrl.payment_params.account_holder" required="true">
+  </div>
+  <div class="form-group">
+    <label>Account No.</label>
+    <input type="number" name='bank_account_number' ng-model="$ctrl.payment_params.bank_account_number" required="true">
+  </div>
+  <div class="form-group">
+    <label>Routing No.</label>
+    <input type="number" name='bank_identification_number' ng-model="$ctrl.payment_params.bank_identification_number">
+  </div>
+  <div class="form-group">
+    <label>Account Type</label>
+    <select type="number" name='bank_account_type' ng-model="$ctrl.payment_params.bank_account_type">
+      <option value="CHECKING">Checking</option>
+      <option value="SAVING">Savings</option>
+    </select>
+  </div>
+</fieldset>
