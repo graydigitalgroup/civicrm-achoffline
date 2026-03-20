@@ -10,8 +10,6 @@ return [
     'title_plural' => E::ts('Bank Accounts'),
     'description' => E::ts('Bank Accounts'),
     'log' => TRUE,
-    'label_field' => 'description',
-    'add' => '4.3',
   ],
   'getFields' => fn() => [
     'id' => [
