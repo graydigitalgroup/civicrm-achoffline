@@ -1,4 +1,4 @@
-{crmScope extensionKey='ACHOffline'}
+{crmScope extensionKey='achoffline'}
 {if isset($form.payment_token)}
   <div class="crm-section {$form.payment_token.name}-section">
     <div class="label">
@@ -10,8 +10,8 @@
     <div class="clear"></div>
   </div>
 {/if}
-{capture assign="CheckImage"}{crmResURL ext="ACHOffline" file="images/USD_check_500x.jpg"}{/capture}
-{capture assign="CheckNotes"}{ts domain='ACHOffline'}You can find your Bank Routing Number and Bank Account number by inspecting a check.{/ts}{/capture}
+{capture assign="CheckImage"}{crmResURL ext="achoffline" file="images/USD_check_500x.jpg"}{/capture}
+{capture assign="CheckNotes"}{ts domain='achoffline'}You can find your Bank Routing Number and Bank Account number by inspecting a check.{/ts}{/capture}
 {literal}
   <script>
 
