@@ -1,9 +1,5 @@
 <?php
 
-/**
- * @file
- */
-
 return [
   [
     'name' => 'CustomGroup_ACH_Data',
@@ -24,6 +20,8 @@ return [
         'collapse_adv_display' => TRUE,
         'is_public' => FALSE,
         'icon' => '',
+        'is_active' => TRUE,
+        'table_name' => 'civicrm_value_ach_data',
       ],
       'match' => [
         'name',
