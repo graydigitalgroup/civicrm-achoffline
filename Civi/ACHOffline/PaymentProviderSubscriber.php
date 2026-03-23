@@ -2,6 +2,8 @@
 
 namespace Civi\ACHOffline;
 
+use Civi\API\Event\RespondEvent;
+use Civi\Api4\Generic\AutocompleteAction;
 use Civi\Core\Service\AutoSubscriber;
 
 /**

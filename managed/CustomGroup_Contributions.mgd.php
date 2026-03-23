@@ -6,51 +6,53 @@
 
 return [
   [
-    'name' => 'CustomGroup_ACH_Data',
-    'entity' => 'CustomGroup',
+    'name'    => 'CustomGroup_ACH_Data',
+    'entity'  => 'CustomGroup',
     'cleanup' => 'unused',
-    'update' => 'unmodified',
-    'params' => [
+    'update'  => 'unmodified',
+    'params'  => [
       'version' => 4,
-      'values' => [
-        'name' => 'ACH_Processor_Data',
-        'title' => \CRM_ACHOffline_ExtensionUtil::ts('ACH Data'),
-        'extends' => 'Contribution',
-        'style' => 'Inline',
-        'collapse_display' => TRUE,
-        'help_pre' => '',
-        'help_post' => '',
-        'weight' => 14,
+      'values'  => [
+        'name'                 => 'ACH_Processor_Data',
+        'title'                => \CRM_ACHOffline_ExtensionUtil::ts('ACH Data'),
+        'extends'              => 'Contribution',
+        'style'                => 'Inline',
+        'collapse_display'     => TRUE,
+        'help_pre'             => '',
+        'help_post'            => '',
+        'weight'               => 14,
         'collapse_adv_display' => TRUE,
-        'is_public' => FALSE,
-        'icon' => '',
+        'is_public'            => FALSE,
+        'icon'                 => '',
+        'table_name'           => 'civicrm_value_ach_data',
       ],
-      'match' => [
+      'match'   => [
         'name',
       ],
     ],
   ],
   [
-    'name' => 'CustomGroup_BankAccount',
-    'entity' => 'CustomField',
+    'name'    => 'CustomGroup_BankAccount',
+    'entity'  => 'CustomField',
     'cleanup' => 'unused',
-    'update' => 'unmodified',
-    'params' => [
+    'update'  => 'unmodified',
+    'params'  => [
       'version' => 4,
-      'values' => [
+      'values'  => [
         'custom_group_id.name' => 'ACH_Processor_Data',
-        'name' => 'Bank_Account',
-        'label' => \CRM_ACHOffline_ExtensionUtil::ts('Bank Account'),
-        'data_type' => 'EntityReference',
-        'html_type' => 'Autocomplete-Select',
-        'weight' => 7,
-        'text_length' => 255,
-        'note_columns' => 60,
-        'note_rows' => 4,
-        'column_name' => 'contribution_bank_account',
-        'fk_entity' => 'BankAccount',
+        'name'                 => 'Bank_Account',
+        'label'                => \CRM_ACHOffline_ExtensionUtil::ts('Bank Account'),
+        'data_type'            => 'EntityReference',
+        'html_type'            => 'Autocomplete-Select',
+        'weight'               => 7,
+        'text_length'          => 255,
+        'note_columns'         => 60,
+        'note_rows'            => 4,
+        'column_name'          => 'contribution_bank_account',
+        'fk_entity'            => 'PaymentToken',
+        'attributes'           => 'min_input_length=0',
       ],
-      'match' => [
+      'match'   => [
         'name',
         'custom_group_id',
       ],
