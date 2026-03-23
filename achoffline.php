@@ -30,3 +30,33 @@ function achoffline_civicrm_install(): void {
 function achoffline_civicrm_enable(): void {
   _achoffline_civix_civicrm_enable();
 }
+
+/**
+ * Implements hook_civicrm_apiWrappers().
+ *
+ * Sets the label field for the PaymentToken autocomplete.
+ */
+function achoffline_civicrm_apiWrappers(array &$wrappers, $apiRequest): void {
+  $entity = is_array($apiRequest) ? ($apiRequest['entity'] ?? '') : $apiRequest->getEntityName();
+  $action = is_array($apiRequest) ? ($apiRequest['action'] ?? '') : $apiRequest->getActionName();
+
+  if ($entity === 'PaymentToken' && $action === 'autocomplete') {
+    $wrappers[] = new CRM_ACHOffline_PaymentTokenAutocompleteWrapper();
+  }
+}
+
+/**
+ * Implements hook_civicrm_buildForm().
+ */
+function achoffline_civicrm_buildForm(string $formName, \CRM_Core_Form &$form): void {
+  if (!in_array($formName, [
+    'CRM_Contribute_Form_Contribution',
+    'CRM_Contribute_Form_AdditionalInfo',
+  ])) {
+    return;
+  }
+
+  CRM_Core_Resources::singleton()
+    ->addScriptFile(E::LONG_NAME, 'js/ach-autocomplete.js', 10, 'page-header')
+    ->addStyleFile(E::LONG_NAME, 'css/ach-autocomplete.css', 10, 'page-header');
+}

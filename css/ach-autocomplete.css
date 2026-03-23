@@ -1,0 +1,8 @@
+/* css/ach-autocomplete.css */
+
+/* Hide the search input in PaymentToken autocomplete dropdowns since
+   the list is short enough to not need filtering. */
+[data-api-entity="PaymentToken"] ~ .select2-drop .select2-search,
+.select2-drop-active .select2-search:has(+ .select2-results [data-entity="PaymentToken"]) {
+  display: none !important;
+}
