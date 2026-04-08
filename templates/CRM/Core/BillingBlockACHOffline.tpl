@@ -41,9 +41,11 @@
 
       function savedAccountSelector() {
         const paymentTokenElement = document.querySelector('select#payment_token');
-        paymentTokenElement.addEventListener('change', (event) => {
-          updateACHFields();
-        });
+        if (paymentTokenElement) {
+          paymentTokenElement.addEventListener('change', (event) => {
+            updateACHFields();
+          });
+        }
       }
 
       function addACHInstructions() {
@@ -76,7 +78,7 @@
 
       function updateACHFields() {
         const paymentTokenElement = document.querySelector('select#payment_token');
-        if (paymentTokenElement.value == 0) {
+        if (!paymentTokenElement || paymentTokenElement.value === 0) {
           document.querySelector('input#bank_name').classList.add('required');
           document.querySelector('input#bank_account_number').classList.add('required');
           document.querySelector('input#bank_identification_number').classList.add('required');
