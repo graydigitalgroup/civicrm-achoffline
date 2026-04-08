@@ -35,6 +35,21 @@ class CRM_ACHOffline_Upgrader extends \CRM_Extension_Upgrader_Base {
   }
 
   /**
+   * Change data type for account information.
+   *
+   * @returns TRUE on success
+   * @throws \CRM_Core_Exception
+   */
+  public function upgrade_1002(): bool {
+    $this->ctx->log->info('Changing account_number column to TEXT');
+    CRM_Upgrade_Incremental_Base::alterColumn($this->ctx, 'civicrm_bank_account', 'account_number', 'TEXT NOT NULL' );
+
+    $this->ctx->log->info('Changing routing_number column to TEXT');
+    CRM_Upgrade_Incremental_Base::alterColumn($this->ctx, 'civicrm_bank_account', 'routing_number', 'TEXT NOT NULL' );
+    return TRUE;
+  }
+
+  /**
    * Ensure the custom data table for a given CustomGroup exists in the schema.
    *
    * If CiviCRM created the CustomGroup managed entity but didn't create the

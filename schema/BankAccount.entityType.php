@@ -47,7 +47,7 @@ return [
     ],
     'account_number' => [
       'title' => E::ts('Bank Account Number'),
-      'sql_type' => 'varchar(20)',
+      'sql_type' => 'text',
       'input_type' => 'Text',
       'required' => TRUE,
       'description' => E::ts('The bank account number the funds will come out of.'),
@@ -55,7 +55,7 @@ return [
     ],
     'routing_number' => [
       'title' => E::ts('Bank Routing Number'),
-      'sql_type' => 'varchar(20)',
+      'sql_type' => 'text',
       'input_type' => 'Text',
       'required' => TRUE,
       'description' => E::ts('The Bank\'s Routing Number. Normally a 9-digit number.'),
