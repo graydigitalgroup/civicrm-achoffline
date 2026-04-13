@@ -4,6 +4,7 @@ use Civi\Api4\BankAccount;
 use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
 use Civi\Api4\ContributionRecur;
+use Civi\Api4\OptionValue;
 use Civi\Api4\PaymentToken;
 use Civi\Payment\Exception\PaymentProcessorException;
 use Civi\Payment\PropertyBag;
@@ -72,7 +73,7 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       'name'        => 'bank_account_type',
       'title'       => ts('Account type'),
       'is_required' => TRUE,
-      'attributes'  => ['CHECKING' => 'Checking', 'SAVING' => 'Savings'],
+      'attributes'  => $this->getBankAccountTypeOptions(),
     ];
     // Modify the label of Account Number.
     $metadata['bank_account_number']['title'] = ts('Account No.');
@@ -494,12 +495,12 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       $token = PaymentToken::get(FALSE)
         ->addSelect('id')
         ->setWhere([
-         ['id', '=', $tokenID],
-         ['OR', [
-           ['expiry_date', 'IS NULL'],
-           ['expiry_date', '>=', date('Y-m-d')],
-         ]],
-       ])
+          ['id', '=', $tokenID],
+          ['OR', [
+            ['expiry_date', 'IS NULL'],
+            ['expiry_date', '>=', date('Y-m-d')],
+          ]],
+        ])
         ->execute()
         ->first();
 
@@ -512,7 +513,8 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       return $tokenID;
     }
 
-    // New account details entered on the form.
+    // New account details entered on the form — create the BankAccount
+    // and let BankAccountSubscriber handle PaymentToken creation.
     $accountNumber = $propertyBag->getCustomProperty('bank_account_number') ?? '';
     $routingNumber = $propertyBag->getCustomProperty('bank_identification_number') ?? '';
 
@@ -532,33 +534,32 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     $accountName = $propertyBag->getCustomProperty('bank_name')
       ?? ($contact['display_name'] . ' Bank Account');
 
-    $tokenString  = \CRM_Contribute_BAO_Contribution::generateInvoiceID();
-    $accountType  = ucfirst(strtolower($propertyBag->getCustomProperty('bank_account_type')));
-    $maskedNumber = CRM_Utils_System::mungeCreditCard($accountNumber);
-    $label        = trim("{$accountType} {$maskedNumber}");
-
-    BankAccount::create(FALSE)
+    // Create BankAccount — BankAccountEncryptionSubscriber handles
+    // encryption and BankAccountSubscriber handles PaymentToken creation.
+    $bankAccount = BankAccount::create(FALSE)
       ->addValue('contact_id', $contactID)
       ->addValue('name', $accountName)
-      ->addValue('account_number',
-                 \Civi::service('crypto.token')->encrypt($accountNumber, 'CRED'))
-      ->addValue('routing_number',
-                 \Civi::service('crypto.token')->encrypt($routingNumber, 'CRED'))
+      ->addValue('account_number', $accountNumber)
+      ->addValue('routing_number', $routingNumber)
       ->addValue('account_holder',
                  $propertyBag->getCustomProperty('account_holder'))
       ->addValue('account_type',
                  $propertyBag->getCustomProperty('bank_account_type'))
-      ->addValue('payment_token', $tokenString)
-      ->execute();
-
-    $paymentToken = PaymentToken::create(FALSE)
-      ->addValue('contact_id', $contactID)
-      ->addValue('payment_processor_id', $this->getPaymentProcessor()['id'])
-      ->addValue('token', $tokenString)
-      ->addValue('masked_account_number', $label)
-      ->addValue('ACH_Token_Data.label', $label)
       ->execute()
       ->first();
+
+    // Fetch the PaymentToken that BankAccountSubscriber just created.
+    $paymentToken = PaymentToken::get(FALSE)
+      ->addSelect('id')
+      ->addWhere('token', '=', $bankAccount['payment_token'])
+      ->execute()
+      ->first();
+
+    if (empty($paymentToken)) {
+      throw new PaymentProcessorException(
+        'Failed to create payment token for bank account.', 1004
+      );
+    }
 
     return (int) $paymentToken['id'];
   }
@@ -699,6 +700,76 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    */
   public function checkConfig() {
     return NULL;
+  }
+
+  /**
+   * Default payment instrument validation.
+   *
+   * @param array $values
+   *   The form values for the contribution.
+   * @param array $errors
+   *   The array of errors for the form values.
+   *
+   * @return void
+   */
+  public function validatePaymentInstrument($values, &$errors) {
+    // Check to see if we are processing a recurring contribution.
+    if (array_key_exists('is_recur', $values) && $values['is_recur'] == TRUE) {
+      // Make sure the frequency unit is not set to day as this has not been implemented yet.
+      if (array_key_exists('frequency_unit', $values) && $values['frequency_unit'] === 'day') {
+        $errors['frequency_unit'] = \CRM_ACHOffline_ExtensionUtil::ts('Current implementation does not support recurring with frequency "day"');
+        return;
+      }
+    }
+
+    $mandatoryFields = $this->getMandatoryFields();
+    if (isset($values['payment_token']) && ($values['payment_token'] != 0)) {
+      // If we have a payment token, we don't need bank fields
+      $fields = $this->getPaymentFormFields();
+      foreach($fields as $field) {
+        unset($mandatoryFields[$field]);
+      }
+    }
+    CRM_Core_Form::validateMandatoryFields($mandatoryFields, $values, $errors);
+  }
+
+  /**
+   * Load bank account type options from the bank_account_types OptionGroup.
+   *
+   * Falls back to hardcoded defaults if the OptionGroup is not found,
+   * for example during initial install before managed entities are processed.
+   *
+   * @return array  Keyed by value, with label as the value.
+   */
+  private function getBankAccountTypeOptions(): array {
+    try {
+      $options = OptionValue::get(FALSE)
+        ->addSelect('value', 'label')
+        ->addWhere('option_group_id.name', '=', 'bank_account_types')
+        ->addWhere('is_active', '=', TRUE)
+        ->addOrderBy('weight', 'ASC')
+        ->execute();
+
+      $result = [];
+      foreach ($options as $option) {
+        $result[$option['value']] = $option['label'];
+      }
+
+      if (!empty($result)) {
+        return $result;
+      }
+    }
+    catch (\Throwable $e) {
+      \Civi::log()->warning('ACHOffline: Could not load bank_account_types options, falling back to defaults.', [
+        'error' => $e->getMessage(),
+      ]);
+    }
+
+    // Fallback in case OptionGroup hasn't been created yet.
+    return [
+      'CHECKING' => ts('Checking'),
+      'SAVINGS'  => ts('Savings'),
+    ];
   }
 
 }
