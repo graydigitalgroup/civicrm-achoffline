@@ -72,10 +72,13 @@ return [
     'account_type' => [
       'title' => E::ts('Account Type'),
       'sql_type' => 'varchar(20)',
-      'input_type' => 'Text',
+      'input_type' => 'Select',
       'required' => TRUE,
       'description' => E::ts('Is this a checking or savings account.'),
       'add' => '4.3',
+      'pseudoconstant' => [
+        'option_group_name' => 'bank_account_types',
+      ],
     ],
     'contact_id' => [
       'title' => E::ts('Contact ID'),
