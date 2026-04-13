@@ -4,12 +4,15 @@ namespace Civi\ACHOffline;
 
 use Civi\API\Event\RespondEvent;
 use Civi\Api4\Generic\AutocompleteAction;
-use Civi\Core\Service\AutoSubscriber;
+use Civi\Core\Service\AutoService;
 
 /**
  * Adds custom logic to Contributions.
+ *
+ * @service
+ * @internal
  */
-class PaymentProviderSubscriber extends AutoSubscriber {
+class PaymentProviderSubscriber extends AutoService {
 
   /**
    * Binds function to Civi events.
