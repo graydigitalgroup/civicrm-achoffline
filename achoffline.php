@@ -32,20 +32,6 @@ function achoffline_civicrm_enable(): void {
 }
 
 /**
- * Implements hook_civicrm_apiWrappers().
- *
- * Sets the label field for the PaymentToken autocomplete.
- */
-function achoffline_civicrm_apiWrappers(array &$wrappers, $apiRequest): void {
-  $entity = is_array($apiRequest) ? ($apiRequest['entity'] ?? '') : $apiRequest->getEntityName();
-  $action = is_array($apiRequest) ? ($apiRequest['action'] ?? '') : $apiRequest->getActionName();
-
-  if ($entity === 'PaymentToken' && $action === 'autocomplete') {
-    $wrappers[] = new CRM_ACHOffline_PaymentTokenAutocompleteWrapper();
-  }
-}
-
-/**
  * Implements hook_civicrm_buildForm().
  */
 function achoffline_civicrm_buildForm(string $formName, \CRM_Core_Form &$form): void {
@@ -59,4 +45,20 @@ function achoffline_civicrm_buildForm(string $formName, \CRM_Core_Form &$form): 
   CRM_Core_Resources::singleton()
     ->addScriptFile(E::LONG_NAME, 'js/ach-autocomplete.js', 10, 'page-header')
     ->addStyleFile(E::LONG_NAME, 'css/ach-autocomplete.css', 10, 'page-header');
+}
+
+/**
+ * Implements hook_civicrm_permission().
+ *
+ * Define BankAccount permissions.
+ */
+function achoffline_civicrm_permission(&$permissions) {
+  $permissions['edit own bank accounts'] = [
+    'label'       => E::ts('ACHOffline: Edit Own Bank Accounts'),
+    'description' => E::ts('Allow contacts to manage their own saved bank accounts.'),
+  ];
+  $permissions['administer bank accounts'] = [
+    'label'       => E::ts('ACHOffline: Administer Bank Accounts'),
+    'description' => E::ts('Allow staff to manage bank accounts for any contact.'),
+  ];
 }

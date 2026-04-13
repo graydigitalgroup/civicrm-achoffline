@@ -16,6 +16,31 @@ CRM.$(function($) {
         const instance = $field.data('select2');
 
         if (instance) {
+          // Grab contact ID from the contribution form — it's either in a
+          // hidden field or available from the form's cid URL parameter.
+          const contactId = $('input[name="contact_id"]').val() || new URLSearchParams(window.location.search).get('cid') || null;
+
+          if (contactId) {
+            const originalData = instance.opts.ajax.data;
+            instance.opts.ajax.data = function(term, page) {
+              const data = originalData ? originalData.call(this, term, page) : {};
+
+              // Parse the existing params JSON string, inject contact_id,
+              // then re-serialize so filters arrive inside params consistently.
+              try {
+                const params = JSON.parse(data.params || '{}');
+                params.filters = params.filters || {};
+                params.filters.contact_id = contactId;
+                data.params = JSON.stringify(params);
+              }
+              catch (e) {
+                console.error('ACHOffline: Failed to inject contact_id into params', e);
+              }
+              console.log('Autocomplete AJAX params:', JSON.stringify(data));
+              return data;
+            };
+          }
+
           // Directly mutate the initialized Select2 v3 instance options
           // so minimumInputLength takes effect without reinitializing.
           instance.opts.minimumInputLength = 0;
