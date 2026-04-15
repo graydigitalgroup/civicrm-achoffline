@@ -83,6 +83,16 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   }
 
   /**
+   * Public alias for getAllFields
+   *
+   * TODO: remove if https://github.com/civicrm/civicrm-core/pull/35180 is merged
+   */
+  public function exposeAllFields(): array {
+    return $this->getAllFields();
+  }
+
+
+  /**
    * Are back office payments supported.
    *
    * @return bool
