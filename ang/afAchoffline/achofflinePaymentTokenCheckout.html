@@ -1,0 +1,14 @@
+<div
+  class="form-group af-checkout-field af-checkout-field_payment_token"
+  ng-if="$ctrl.accountOptions.length">
+  <label for="payment_token">Select Existing Account</label>
+  <select
+    id="payment_token"
+    name="payment_token"
+    crm-ui-select="{placeholder: '- select -', allowClear: true}"
+    ng-model="$ctrl.checkout_params.payment_token"
+    ng-options="option.id as option.label for option in $ctrl.accountOptions"
+    required>
+    <option value=""></option>
+  </select>
+</div>

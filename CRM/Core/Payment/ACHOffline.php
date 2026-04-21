@@ -68,13 +68,20 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    */
   public function getPaymentFormFieldsMetadata(): array {
     $metadata = parent::getPaymentFormFieldsMetadata();
+    $paymentFields = $this->getPaymentFormFields();
+    foreach ($metadata as $fieldName => $fieldData) {
+      if (!in_array($fieldName, $paymentFields)) {
+        unset($metadata[$fieldName]);
+      }
+    }
     $metadata['bank_account_type'] = [
-      'htmlType'    => 'Select',
+      'htmlType'    => 'select',
       'name'        => 'bank_account_type',
       'title'       => ts('Account type'),
       'is_required' => TRUE,
       'attributes'  => $this->getBankAccountTypeOptions(),
     ];
+
     // Modify the label of Account Number.
     $metadata['bank_account_number']['title'] = ts('Account No.');
     // Modify the label of Bank Identification Number.
@@ -260,7 +267,7 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       'email'              => $propertyBag->has('email') ? $propertyBag->getEmail() : '',
       'ip_address'         => $paymentParams['ip_address'] ?? '',
       'accounting_code'    => $paymentParams['contributionType_accounting_code'] ?? '',
-      'invoice_id'         => $propertyBag->getInvoiceID(),
+      'invoice_id'         => $propertyBag->has('invoiceID') ? $propertyBag->getInvoiceID() : '',
       'description'        => $propertyBag->getDescription(),
       'is_test'            => $this->_paymentProcessor['is_test'],
       'payment_token_id'   => $paymentTokenID,
@@ -498,10 +505,9 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     \Civi\Payment\PropertyBag $propertyBag
   ): int {
     // Existing saved account selected on the form.
-    if ($propertyBag->has('bankAccount')
-      && !empty($propertyBag->getCustomProperty('bankAccount'))) {
-      $tokenID = (int) $propertyBag->getCustomProperty('bankAccount');
-
+    if ($propertyBag->has('paymentToken')
+      && !empty($propertyBag->getPaymentToken())) {
+      $tokenID = (int) $propertyBag->getPaymentToken();
       $token = PaymentToken::get(FALSE)
         ->addSelect('id')
         ->setWhere([
@@ -544,19 +550,36 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     $accountName = $propertyBag->getCustomProperty('bank_name')
       ?? ($contact['display_name'] . ' Bank Account');
 
-    // Create BankAccount — BankAccountEncryptionSubscriber handles
-    // encryption and BankAccountSubscriber handles PaymentToken creation.
-    $bankAccount = BankAccount::create(FALSE)
-      ->addValue('contact_id', $contactID)
-      ->addValue('name', $accountName)
-      ->addValue('account_number', $accountNumber)
-      ->addValue('routing_number', $routingNumber)
-      ->addValue('account_holder',
-                 $propertyBag->getCustomProperty('account_holder'))
-      ->addValue('account_type',
-                 $propertyBag->getCustomProperty('bank_account_type'))
-      ->execute()
-      ->first();
+    $crypto = \Civi::service('crypto.token');
+    $bankAccount = NULL;
+    // Try and locate existing account.
+    $existingAccounts = BankAccount::get(FALSE)
+      ->addWhere('contact_id', '=', $contactID)
+      ->execute();
+    foreach ($existingAccounts as $record) {
+      $recordAccountNumber = $crypto->decrypt($record['account_number'], 'CRED');
+      $recordRoutingNumber = $crypto->decrypt($record['routing_number'], 'CRED');
+      if ($accountNumber === $recordAccountNumber && $routingNumber === $recordRoutingNumber) {
+        $bankAccount = $record;
+        break;
+      }
+    }
+
+    if (empty($bankAccount)) {
+      // Create BankAccount — BankAccountEncryptionSubscriber handles
+      // encryption and BankAccountSubscriber handles PaymentToken creation.
+      $bankAccount = BankAccount::create(FALSE)
+        ->addValue('contact_id', $contactID)
+        ->addValue('name', $accountName)
+        ->addValue('account_number', $accountNumber)
+        ->addValue('routing_number', $routingNumber)
+        ->addValue('account_holder',
+                   $propertyBag->getCustomProperty('account_holder'))
+        ->addValue('account_type',
+                   $propertyBag->getCustomProperty('bank_account_type'))
+        ->execute()
+        ->first();
+    }
 
     // Fetch the PaymentToken that BankAccountSubscriber just created.
     $paymentToken = PaymentToken::get(FALSE)
