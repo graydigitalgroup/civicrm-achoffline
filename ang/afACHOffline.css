@@ -1,0 +1,7 @@
+/* Add any CSS rules for Angular module "afACHOffline" */
+
+.af-ach-offline-params .form-group {
+  display: flex;
+  flex-flow: column;
+  align-items: flex-start;
+}
