@@ -60,17 +60,4 @@ abstract class ACHOfflineCheckoutOptionBase implements CheckoutOptionInterface, 
     return 'achoffline';
   }
 
-  public static function resolveCurrentContactId(): ?int {
-    $cid = \CRM_Utils_Request::retrieve('cid', 'Positive');
-    if ($cid && \Civi\Api4\Contact::get(TRUE)
-        ->addWhere('id', '=', $cid)
-        ->selectRowCount()
-        ->execute()
-        ->count()) {
-      return (int) $cid;
-    }
-    $loggedIn = \CRM_Core_Session::getLoggedInContactID();
-    return $loggedIn ? (int) $loggedIn : NULL;
-  }
-
 }

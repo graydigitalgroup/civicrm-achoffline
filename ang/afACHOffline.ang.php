@@ -14,6 +14,6 @@ return [
   'partials' => [
     'ang/afACHOffline',
   ],
-  'requires' => ['crmUi', 'crmUtil', 'ngRoute', 'afPayment'],
+  'requires' => ['crmUi', 'crmUtil', 'ngRoute', 'afCheckout'],
   'settings' => [],
 ];
