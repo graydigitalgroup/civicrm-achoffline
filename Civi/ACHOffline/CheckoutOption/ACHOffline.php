@@ -12,59 +12,6 @@ use CRM_Utils_Request;
 
 class ACHOffline extends ACHOfflineCheckoutOptionBase {
 
-  /**
-   * @inheritdoc
-   * @throws \CRM_Core_Exception
-   */
-  public function startCheckout(CheckoutSession $session): void {
-    $params = $session->getCheckoutParams();
-
-    // FIXME: copy doPayment implementation and switch to Api4 style keys
-    $whatOldStyleKeysDoesDoPaymentNeed = ['amount', 'contributionID', 'contactID', 'currency', 'invoiceID'];
-    $params += CheckoutOptionUtils::fetchRequiredParams($session->getContributionId(), [], $whatOldStyleKeysDoesDoPaymentNeed, $params);
-
-    $contact = Contact::get(FALSE)
-      ->addWhere('id', '=', $params['contact_id'])
-      ->execute()
-      ->first();
-    $contactAddress = Address::get(FALSE)
-      ->addWhere('contact_id', '=', $params['contact_id'])
-      ->addWhere('is_billing', '=', TRUE)
-      ->execute()
-      ->first();
-    if (!$contactAddress) {
-      $contactAddress = Address::get(FALSE)
-        ->addWhere('contact_id', '=', $params['contact_id'])
-        ->addWhere('is_primary', '=', TRUE)
-        ->execute()
-        ->first();
-    }
-    $params['billingFirstName'] = $contact['first_name'];
-    $params['billingLastName'] = $contact['last_name'];
-    $params['billingStreetAddress'] = $contactAddress['street_address'] ?? '';
-    $params['billingCity'] = $contactAddress['city'] ?? '';
-    $params['billingStateProvince'] = $contactAddress['state_province_id'] ?? '';
-    $params['billingPostalCode'] = $contactAddress['postal_code'] ?? '';
-    $params['billingCountry'] = $contactAddress['country_id'] ?? '';
-
-    $payment = $this->getQuickformProcessor($session->isTestMode())->doPayment($params);
-
-    // Payment should always return pending since it is handled offline
-    if ($payment['payment_status'] == 'Pending') {
-      $session->pending();
-      // ensure clientside messages are shown
-      $session->setResponseItem('message', $session->getStatusMessage());
-      return;
-    }
-  }
-
-  /**
-   * @inheritdoc
-   */
-  public function continueCheckout(CheckoutSession $session): void {
-    // everything happens in the first submit, so nothing more to do here
-  }
-
   public function getAfformSettings(bool $testMode): array {
     // FIXME: billing fields should really come from other entities on the form
     $fields = CheckoutOptionUtils::mapQuickformFieldMetadata($this->getQuickformProcessor()->getPaymentFormFieldsMetadata());
