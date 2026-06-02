@@ -5,6 +5,7 @@ use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
 use Civi\Api4\ContributionRecur;
 use Civi\Api4\OptionValue;
+use Civi\Api4\PaymentProcessor;
 use Civi\Api4\PaymentToken;
 use Civi\Payment\Exception\PaymentProcessorException;
 use Civi\Payment\PropertyBag;
@@ -294,13 +295,13 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
           $query_args['pay_period'] = 'WEEKLY';
           break;
 
-        case '2 weeks':
+        case '2 week':
           $propertyBag->setRecurFrequencyUnit('week');
           $propertyBag->setRecurFrequencyInterval(2);
           $query_args['pay_period'] = 'BIWEEKLY';
           break;
 
-        case '4 weeks':
+        case '4 week':
           $propertyBag->setRecurFrequencyUnit('week');
           $propertyBag->setRecurFrequencyInterval(4);
           $query_args['pay_period'] = 'FOUR_WEEKLY';
@@ -312,13 +313,13 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
           $query_args['pay_period'] = 'MONTHLY';
           break;
 
-        case '3 months':
+        case '3 month':
           $propertyBag->setRecurFrequencyUnit('month');
           $propertyBag->setRecurFrequencyInterval(3);
           $query_args['pay_period'] = 'QUARTERLY';
           break;
 
-        case '6 months':
+        case '6 month':
           $propertyBag->setRecurFrequencyUnit('month');
           $propertyBag->setRecurFrequencyInterval(6);
           $query_args['pay_period'] = 'SEMIANNUAL';
@@ -803,6 +804,71 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       'CHECKING' => ts('Checking'),
       'SAVINGS'  => ts('Savings'),
     ];
+  }
+
+  /**
+   * @throws \CRM_Core_Exception
+   * @throws \Civi\API\Exception\UnauthorizedException
+   */
+  public function handlePaymentCron(): void {
+    // Running this job in parallell could generate bad duplicate contributions.
+    $lock = new CRM_Core_Lock('civicrm.job.achofflinecontributionrecurschedule');
+
+    if (!$lock->acquire()) {
+      Civi::log()->warning("Detected processing race for scheduled payments, aborting");
+      return;
+    }
+
+    $paymentProcessors = PaymentProcessor::get(TRUE)
+      ->addWhere('class_name', '=', 'Payment_ACHOffline')
+      ->setLimit(25)
+      ->execute()
+      ->getArrayCopy();
+
+    if (empty($paymentProcessors)) {
+      $lock->release();
+      Civi::log()->warning('Failed to find any ACHOffline processors. No contribution records were processed.');
+      return;
+    }
+
+    $scheduled_contributions = $this->get_scheduled_contributions();
+    foreach ($scheduled_contributions as $contribution) {
+      $templateContributionID = \CRM_Contribute_BAO_ContributionRecur::ensureTemplateContributionExists($contribution['id']);
+      $order = new CRM_Financial_BAO_Order();
+      $order->setTemplateContributionID($templateContributionID);
+      $order->save($contribution);
+
+      //look at api v3 repeatransaction or something similar
+    }
+
+    $lock->release();
+  }
+
+  /**
+   * Gets recurring contributions that are scheduled to be processed today
+   *
+   * @return array An array of contribution_recur objects
+   * @throws \CRM_Core_Exception
+   */
+  protected function get_scheduled_contributions(): array {
+    $scheduled_today = ContributionRecur::get(TRUE);
+
+    // Only get contributions for the current processor
+    $scheduled_today->addWhere('payment_processor_id', '=', $this->_paymentProcessor['id']);
+
+    // Only get contribution that are on or past schedule
+    $dtCurrentDay    = date("Ymd", mktime(0, 0, 0, date("m"), date("d"), date("Y")));
+    $dtCurrentDayEnd   = $dtCurrentDay . "235959";
+    $scheduled_today->addWhere('next_sched_contribution_date', '<=', $dtCurrentDayEnd);
+
+    // Get pending contributions
+    $pending_status_id = CRM_Core_PseudoConstant::getKey(
+      'CRM_Contribute_BAO_Contribution',
+      'contribution_status_id',
+      'Pending'
+    );
+    $scheduled_today->addWhere('contribution_status_id', '=', $pending_status_id);
+    return $scheduled_today->execute()->getArrayCopy();
   }
 
 }
