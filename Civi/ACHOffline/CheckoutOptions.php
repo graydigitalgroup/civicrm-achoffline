@@ -19,9 +19,9 @@ class CheckoutOptions extends AutoService implements EventSubscriberInterface {
   }
 
   public function getCheckoutOptions(GenericHookEvent $e): void {
-    $authnetPairs = CheckoutOptionUtils::getPaymentProcessorPairs(['ACHOffline']);
+    $achofflinePairs = CheckoutOptionUtils::getPaymentProcessorPairs(['ACHOffline']);
 
-    foreach ($authnetPairs as $name => $pair) {
+    foreach ($achofflinePairs as $name => $pair) {
       $e->options["achoffline_{$name}"] = new CheckoutOption\ACHOffline($pair['live'], $pair['test']);
       $e->options["achoffline_token_{$name}"] = new CheckoutOption\PaymentToken($pair['live'], $pair['test']);
     }
