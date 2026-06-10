@@ -69,7 +69,8 @@ abstract class ACHOfflineCheckoutOptionBase implements CheckoutOptionInterface, 
         'contribution_recur_id',
         'contribution_recur_id.frequency_unit',
         'contribution_recur_id.frequency_interval',
-        'contribution_recur_id.installments'
+        'contribution_recur_id.installments',
+        'contribution_recur_id.payment_processor_id'
       )
       ->execute()
       ->first();
@@ -81,6 +82,21 @@ abstract class ACHOfflineCheckoutOptionBase implements CheckoutOptionInterface, 
       $params['frequency_interval'] = (int) $recur['contribution_recur_id.frequency_interval'];
       // 0 / NULL installments means open-ended; doPayment treats 1 as a single payment.
       $params['installments'] = (int) ($recur['contribution_recur_id.installments'] ?? 0);
+
+      // Link the recur to this processor now that checkout has chosen one.
+      // The QuickForm sets ContributionRecur.payment_processor_id at recur
+      // creation (it has the processor on the form), but in the afform flow the
+      // recur is created by Order.create BEFORE a checkout option is picked, so
+      // it is created without a processor. Without this back-fill the series has
+      // no payment_processor_id and anything that resolves the processor from it
+      // - core's UpdateSubscription / cancellation, and the template-edit
+      // amount-amend - can't find one.
+      if (empty($recur['contribution_recur_id.payment_processor_id'])) {
+        \Civi\Api4\ContributionRecur::update(FALSE)
+          ->addWhere('id', '=', (int) $recur['contribution_recur_id'])
+          ->addValue('payment_processor_id', $this->getPaymentProcessorId($session->isTestMode()))
+          ->execute();
+      }
     }
 
     $contact = Contact::get(FALSE)
