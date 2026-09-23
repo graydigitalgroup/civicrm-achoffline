@@ -402,9 +402,9 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   /**
    * Process a recurring payment installment.
    *
-   * Called by CiviCRM's process_recurring scheduled job for each due recur.
-   * Creates a Pending contribution and stamps the PaymentToken ID so the
-   * NACHA file builder can find it.
+   * Called by handlePaymentCron() for each due recur (which core invokes via
+   * the Job.run_payment_cron scheduled job). Creates a Pending contribution and
+   * stamps the PaymentToken ID so the NACHA file builder can find it.
    *
    * @param array $params
    *
@@ -448,6 +448,18 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     // already stopped (e.g. status wasn't updated cleanly on the last run).
     if ($this->isInstallmentLimitReached($recur)) {
       $this->completeRecur($recur['id']);
+      return TRUE;
+    }
+
+    // Don't stack installments on top of a returned payment. If a prior
+    // installment was reversed for insufficient funds and reissued as an open
+    // contribution that is still owed, hold off on creating the next one until
+    // staff collect or close it — otherwise the member accrues installments
+    // they never actually paid.
+    if ($this->recurHasOpenReissue((int) $recur['id'])) {
+      Civi::log()->info('ACHOffline: skipping installment; recur has an open NSF reissue awaiting payment', [
+        'contribution_recur_id' => $recur['id'],
+      ]);
       return TRUE;
     }
 
@@ -695,6 +707,28 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   }
 
   /**
+   * Is there an open, still-owed NSF reissue on this recur?
+   *
+   * A reissue is stamped with ACH_Processor_Data.NSF_Reissued_From. While one
+   * sits Pending or Partially paid, the schedule should not advance to a new
+   * installment.
+   *
+   * @param int $recurID
+   *
+   * @return bool
+   * @throws \CRM_Core_Exception
+   */
+  private function recurHasOpenReissue(int $recurID): bool {
+    return (bool) Contribution::get(FALSE)
+      ->selectRowCount()
+      ->addWhere('contribution_recur_id', '=', $recurID)
+      ->addWhere('ACH_Processor_Data.NSF_Reissued_From', 'IS NOT NULL')
+      ->addWhere('contribution_status_id:name', 'IN', ['Pending', 'Partially paid'])
+      ->execute()
+      ->count();
+  }
+
+  /**
    * Mark a ContributionRecur as Completed and stamp its end date.
    *
    * @param int $recurID
@@ -811,7 +845,7 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    * @throws \Civi\API\Exception\UnauthorizedException
    */
   public function handlePaymentCron(): void {
-    // Running this job in parallell could generate bad duplicate contributions.
+    // Running this job in parallel could generate bad duplicate contributions.
     $lock = new CRM_Core_Lock('civicrm.job.achofflinecontributionrecurschedule');
 
     if (!$lock->acquire()) {
@@ -819,29 +853,39 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       return;
     }
 
-    $paymentProcessors = PaymentProcessor::get(TRUE)
-      ->addWhere('class_name', '=', 'Payment_ACHOffline')
-      ->setLimit(25)
-      ->execute()
-      ->getArrayCopy();
+    try {
+      $paymentProcessors = PaymentProcessor::get(TRUE)
+        ->addWhere('class_name', '=', 'Payment_ACHOffline')
+        ->setLimit(25)
+        ->execute()
+        ->getArrayCopy();
 
-    if (empty($paymentProcessors)) {
+      if (empty($paymentProcessors)) {
+        Civi::log()->warning('Failed to find any ACHOffline processors. No contribution records were processed.');
+        return;
+      }
+
+      // Core triggers this via the Job.run_payment_cron scheduled job
+      // (CRM_Core_Payment::handlePaymentMethod('PaymentCron')). ACHOffline is an
+      // offline processor, so nothing else creates or advances its recurring
+      // installments — we drive each due recur through doRecurPayment(), which
+      // uses Contribution.repeattransaction to create the next Pending
+      // contribution from the template and advances (or completes) the schedule.
+      foreach ($this->get_scheduled_contributions() as $recur) {
+        try {
+          $this->doRecurPayment(['contributionRecurID' => $recur['id']]);
+        }
+        catch (\Throwable $e) {
+          Civi::log()->error('ACHOffline: failed to process recurring installment', [
+            'contribution_recur_id' => $recur['id'] ?? NULL,
+            'error' => $e->getMessage(),
+          ]);
+        }
+      }
+    }
+    finally {
       $lock->release();
-      Civi::log()->warning('Failed to find any ACHOffline processors. No contribution records were processed.');
-      return;
     }
-
-    $scheduled_contributions = $this->get_scheduled_contributions();
-    foreach ($scheduled_contributions as $contribution) {
-      $templateContributionID = \CRM_Contribute_BAO_ContributionRecur::ensureTemplateContributionExists($contribution['id']);
-      $order = new CRM_Financial_BAO_Order();
-      $order->setTemplateContributionID($templateContributionID);
-      $order->save($contribution);
-
-      //look at api v3 repeatransaction or something similar
-    }
-
-    $lock->release();
   }
 
   /**
@@ -861,13 +905,14 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     $dtCurrentDayEnd   = $dtCurrentDay . "235959";
     $scheduled_today->addWhere('next_sched_contribution_date', '<=', $dtCurrentDayEnd);
 
-    // Get pending contributions
-    $pending_status_id = CRM_Core_PseudoConstant::getKey(
-      'CRM_Contribute_BAO_Contribution',
-      'contribution_status_id',
-      'Pending'
-    );
-    $scheduled_today->addWhere('contribution_status_id', '=', $pending_status_id);
+    // Active recurs only. A brand-new recur is Pending; once the first
+    // installment settles (the ach-nacha export records the payment) core flips
+    // the recur to In Progress via
+    // CRM_Contribute_BAO_ContributionRecur::updateOnNewPayment(), so we must
+    // match both to keep generating later installments. Overdue lets a lapsed
+    // schedule catch up. Terminal states (Completed/Cancelled/Failed) are
+    // excluded — completeRecur() closes a recur out at its installment limit.
+    $scheduled_today->addWhere('contribution_status_id:name', 'IN', ['Pending', 'In Progress', 'Overdue']);
     return $scheduled_today->execute()->getArrayCopy();
   }
 

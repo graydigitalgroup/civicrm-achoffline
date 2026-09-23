@@ -58,4 +58,28 @@ return [
       ],
     ],
   ],
+  [
+    'name'    => 'CustomField_NSF_Reissued_From',
+    'entity'  => 'CustomField',
+    'cleanup' => 'unused',
+    'update'  => 'unmodified',
+    'params'  => [
+      'version' => 4,
+      'values'  => [
+        'custom_group_id.name' => 'ACH_Processor_Data',
+        'name'                 => 'NSF_Reissued_From',
+        'label'                => \CRM_ACHOffline_ExtensionUtil::ts('NSF Reissued From'),
+        'data_type'            => 'Int',
+        'html_type'            => 'Text',
+        'is_view'              => TRUE,
+        'weight'               => 8,
+        'column_name'          => 'nsf_reissued_from',
+        'help_post'            => \CRM_ACHOffline_ExtensionUtil::ts('When set, this open contribution was reissued because the referenced contribution was reversed for insufficient funds. It blocks the recurring cron from generating the next installment until it is paid or closed.'),
+      ],
+      'match'   => [
+        'name',
+        'custom_group_id',
+      ],
+    ],
+  ],
 ];

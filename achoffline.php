@@ -48,6 +48,31 @@ function achoffline_civicrm_buildForm(string $formName, \CRM_Core_Form &$form): 
 }
 
 /**
+ * Implements hook_civicrm_searchKitTasks().
+ *
+ * Adds a bulk "Reverse (NSF)" task to Contribution search displays. It runs the
+ * Contribution.reverseNsf API action against the selected rows.
+ *
+ * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_searchKitTasks
+ */
+function achoffline_civicrm_searchKitTasks(array &$tasks, bool $checkPermissions, ?int $userID): void {
+  $tasks['Contribution']['achoffline_reverse_nsf'] = [
+    'module'   => 'crmSearchTasks',
+    'title'    => E::ts('Reverse (NSF / Returned Payment)'),
+    'icon'     => 'fa-undo',
+    'number'   => '> 0',
+    'apiBatch' => [
+      'action'     => 'reverseNsf',
+      'params'     => NULL,
+      'confirmMsg' => E::ts('Reverse the %1 selected ACH contributions? Each is cancelled and reissued as an open contribution (plus any configured NSF fee).'),
+      'runMsg'     => E::ts('Reversing %1 contributions...'),
+      'successMsg' => E::ts('Reversed %1 contributions.'),
+      'errorMsg'   => E::ts('An error occurred while reversing contributions.'),
+    ],
+  ];
+}
+
+/**
  * Implements hook_civicrm_permission().
  *
  * Define BankAccount permissions.
