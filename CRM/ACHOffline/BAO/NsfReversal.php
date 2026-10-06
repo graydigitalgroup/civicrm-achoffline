@@ -291,8 +291,12 @@ class CRM_ACHOffline_BAO_NsfReversal {
     $financialTypeID = (int) (\Civi::settings()->get('achoffline_nsf_fee_financial_type_id')
       ?: $original['financial_type_id']);
     $label = \Civi::settings()->get('achoffline_nsf_fee_label') ?: E::ts('NSF / Returned Payment Fee');
+    $defaultPriceSet = CRM_Price_BAO_PriceSet::getDefaultPriceSet('contribution');
+    $priceField = reset($defaultPriceSet);
 
     $lineItem = LineItem::create(FALSE)
+      ->addValue('price_field_id', $priceField['priceFieldID'])
+      ->addValue('price_field_value_id', $priceField['priceFieldValueID'])
       ->addValue('entity_table', 'civicrm_contribution')
       ->addValue('entity_id', $contributionID)
       ->addValue('contribution_id', $contributionID)
