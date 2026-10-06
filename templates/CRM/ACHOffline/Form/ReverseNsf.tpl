@@ -1,6 +1,6 @@
 <div class="crm-block crm-form-block crm-achoffline-reverse-nsf-form-block">
   <div class="help">
-    {ts domain="achoffline"}Each contribution is cancelled and reissued as a new Pending contribution. The NSF fee (0 for none) is added to each reissue.{/ts}
+    {ts domain="achoffline"}Each contribution is cancelled and reissued as a new Pending contribution. The NSF fee (0 for none) is added to each reissue. A reissue that is returned again gets no new fee and is not redrafted; it must be paid by card.{/ts}
   </div>
 
   <table class="selector row-highlight">

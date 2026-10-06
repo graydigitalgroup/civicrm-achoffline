@@ -122,7 +122,7 @@ class CRM_ACHOffline_BAO_NsfReversal {
     $reason = ($reason === NULL || trim($reason) === '') ? NULL : trim($reason);
 
     $original = Contribution::get(FALSE)
-      ->addSelect('*', 'contribution_status_id:name', 'ACH_Processor_Data.Bank_Account')
+      ->addSelect('*', 'contribution_status_id:name', 'ACH_Processor_Data.Bank_Account', 'ACH_Processor_Data.NSF_Reissued_From')
       ->addWhere('id', '=', $contributionID)
       ->execute()
       ->first();
@@ -141,8 +141,9 @@ class CRM_ACHOffline_BAO_NsfReversal {
 
     $transaction = new CRM_Core_Transaction();
     try {
-      $fee = $feeAmount ?? self::getFeeAmount();
-      $reissue = self::reissue($original, $fee);
+      $isRepeatReturn = !empty($original['ACH_Processor_Data.NSF_Reissued_From']);
+      $fee = $isRepeatReturn ? 0.0 : ($feeAmount ?? self::getFeeAmount());
+      $reissue = self::reissue($original, $fee, !$isRepeatReturn);
 
       // Cancel the original. On a Completed/Partially paid contribution core
       // records the reversing financial entries as part of this transition.
@@ -188,7 +189,7 @@ class CRM_ACHOffline_BAO_NsfReversal {
    *
    * @throws \CRM_Core_Exception
    */
-  private static function reissue(array $original, float $fee): array {
+  private static function reissue(array $original, float $fee, bool $carryBankAccount): array {
     $originalTotal = (float) $original['total_amount'];
     $newTotal = $originalTotal + $fee;
 
@@ -205,9 +206,9 @@ class CRM_ACHOffline_BAO_NsfReversal {
       'receive_date'            => date('Y-m-d H:i:s'),
       'source'                  => E::ts('NSF reissue of contribution #%1', [1 => $original['id']]),
       // Marker the recurring cron guard keys on; also carries the bank account
-      // forward so the reissue can be redrafted against the same account.
+      // forward on a first return so the reissue can be redrafted.
       'ACH_Processor_Data.NSF_Reissued_From' => $original['id'],
-      'ACH_Processor_Data.Bank_Account'      => $original['ACH_Processor_Data.Bank_Account'] ?? NULL,
+      'ACH_Processor_Data.Bank_Account'      => $carryBankAccount ? ($original['ACH_Processor_Data.Bank_Account'] ?? NULL) : NULL,
     ];
 
     $new = Contribution::create(FALSE)

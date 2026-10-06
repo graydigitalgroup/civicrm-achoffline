@@ -313,6 +313,29 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
     }
   }
 
+  public function testSecondReturnAddsNoFeeAndIsNotRedrafted(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '10');
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+    $firstID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($originalID)['new_id'];
+    Contribution::update(FALSE)
+      ->addValue('contribution_status_id:name', 'Completed')
+      ->addWhere('id', '=', $firstID)
+      ->execute();
+
+    $res = CRM_ACHOffline_BAO_NsfReversal::reverse($firstID, 10);
+
+    $this->assertEquals(0, $res['fee_amount']);
+    $second = Contribution::get(FALSE)
+      ->addSelect('total_amount', 'ACH_Processor_Data.Bank_Account', 'ACH_Processor_Data.NSF_Reissued_From')
+      ->addWhere('id', '=', $res['new_id'])
+      ->execute()
+      ->first();
+    $this->assertEquals(35, (float) $second['total_amount'], 'first fee carried, no second fee');
+    $this->assertEmpty($second['ACH_Processor_Data.Bank_Account'], 'not redrafted by ACH');
+    $this->assertEquals($firstID, $second['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
   public function testReverseNsfRejectsNegativeFee(): void {
     $recurID = $this->createRecur(0);
     $originalID = $this->createContribution($recurID, 'Completed');
