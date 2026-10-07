@@ -22,7 +22,7 @@
           <td>{$row.amount}</td>
           <td>{$row.receive_date}</td>
           <td>{$row.status|escape}</td>
-          <td>{if $row.skip_reason}<em>{ts domain="achoffline"}Will be skipped:{/ts} {$row.skip_reason|escape}</em>{/if}</td>
+          <td>{if $row.skip_reason}<em>{ts domain="achoffline"}Will be skipped:{/ts} {$row.skip_reason|escape}</em>{elseif $row.repeat_return}<em>{ts domain="achoffline"}No fee (repeat return, card only){/ts}</em>{/if}</td>
         </tr>
       {/foreach}
     </tbody>
@@ -32,7 +32,13 @@
     <table class="form-layout-compressed">
       <tr>
         <td class="label">{$form.fee_amount.label}</td>
-        <td>{$form.fee_amount.html}</td>
+        <td>{$form.fee_amount.html}
+          {if !$firstReturnCount}
+            <div class="description">{ts domain="achoffline"}All selected contributions are repeat returns, so no fee is added.{/ts}</div>
+          {elseif $firstReturnCount < $eligibleCount}
+            <div class="description">{ts domain="achoffline" 1=$firstReturnCount}Applies to the %1 first return(s) only.{/ts}</div>
+          {/if}
+        </td>
       </tr>
       <tr>
         <td class="label">{$form.reason.label}</td>

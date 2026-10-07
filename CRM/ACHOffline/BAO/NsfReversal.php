@@ -101,6 +101,16 @@ class CRM_ACHOffline_BAO_NsfReversal {
   }
 
   /**
+   * A reissue being returned again: no new fee, not redrafted.
+   *
+   * @param array $contribution
+   *   Needs ACH_Processor_Data.NSF_Reissued_From.
+   */
+  public static function isRepeatReturn(array $contribution): bool {
+    return !empty($contribution['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
+  /**
    * Reverse and reissue a single contribution.
    *
    * @param int $contributionID
@@ -141,7 +151,7 @@ class CRM_ACHOffline_BAO_NsfReversal {
 
     $transaction = new CRM_Core_Transaction();
     try {
-      $isRepeatReturn = !empty($original['ACH_Processor_Data.NSF_Reissued_From']);
+      $isRepeatReturn = self::isRepeatReturn($original);
       $fee = $isRepeatReturn ? 0.0 : ($feeAmount ?? self::getFeeAmount());
       $reissue = self::reissue($original, $fee, !$isRepeatReturn);
 

@@ -27,6 +27,8 @@ class ReverseNsf extends AbstractBatchAction {
    * NSF fee to add to each reissue.
    *
    * Leave unset to use the configured NSF fee setting; 0 adds no fee line.
+   * Ignored for a contribution that is itself a reissue (repeat return): it
+   * keeps the original fee line and gets no new fee.
    *
    * @var float|null
    */

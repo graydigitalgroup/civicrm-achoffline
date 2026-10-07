@@ -16,6 +16,8 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
    */
   protected array $eligibleIds = [];
 
+  protected int $firstReturnCount = 0;
+
   public function preProcess(): void {
     $this->setTitle(E::ts('Reverse (NSF / Returned Payment)'));
 
@@ -28,15 +30,20 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
 
     $contributions = Contribution::get(FALSE)
       ->addSelect('id', 'contact_id.display_name', 'total_amount', 'currency', 'receive_date',
-        'contribution_status_id:name', 'contribution_status_id:label', 'ACH_Processor_Data.Bank_Account')
+        'contribution_status_id:name', 'contribution_status_id:label', 'ACH_Processor_Data.Bank_Account',
+        'ACH_Processor_Data.NSF_Reissued_From')
       ->addWhere('id', 'IN', $ids)
       ->execute();
 
     $rows = [];
     foreach ($contributions as $contribution) {
       $skipReason = NsfReversal::getIneligibleReason($contribution);
+      $isRepeatReturn = NsfReversal::isRepeatReturn($contribution);
       if ($skipReason === NULL) {
         $this->eligibleIds[] = (int) $contribution['id'];
+        if (!$isRepeatReturn) {
+          $this->firstReturnCount++;
+        }
       }
       $rows[] = [
         'id' => $contribution['id'],
@@ -45,10 +52,12 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
         'receive_date' => CRM_Utils_Date::customFormat($contribution['receive_date']),
         'status' => $contribution['contribution_status_id:label'],
         'skip_reason' => $skipReason,
+        'repeat_return' => $skipReason === NULL && $isRepeatReturn,
       ];
     }
     $this->assign('rows', $rows);
     $this->assign('eligibleCount', count($this->eligibleIds));
+    $this->assign('firstReturnCount', $this->firstReturnCount);
   }
 
   public function buildQuickForm(): void {
@@ -70,6 +79,9 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
   }
 
   public function setDefaultValues(): array {
+    if ($this->firstReturnCount === 0) {
+      return ['fee_amount' => '0'];
+    }
     $fee = \Civi::settings()->get('achoffline_nsf_fee_amount');
     return ['fee_amount' => ($fee === NULL || $fee === '') ? '0' : $fee];
   }
