@@ -497,6 +497,82 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
   }
 
   /**
+   * Switch the bank account a recurring ACH contribution draws on.
+   *
+   * Core's update-billing form delegates the whole change to the processor.
+   * A gateway processor updates the card held at the gateway and keeps the
+   * same token; ACH has no gateway — the "account on file" is the stored
+   * BankAccount + PaymentToken — so switching means minting a token for the
+   * new account, repointing the recur at it, and moving any drafts the recur
+   * has already queued. The NACHA export reads the token stamped on each
+   * contribution (ACH_Processor_Data.Bank_Account), not the recur, so a Pending
+   * draft left on the old token would still pull the old account. Once nothing
+   * references the old token it becomes deletable (PaymentTokenDeleteSubscriber).
+   *
+   * Defining this method also turns on supports('updateSubscriptionBillingInfo'),
+   * which is what makes the update-billing form available for ACH recurs.
+   *
+   * @param string $message
+   * @param array $params
+   *
+   * @return bool
+   * @throws \Civi\Payment\Exception\PaymentProcessorException
+   * @throws \CRM_Core_Exception
+   */
+  public function updateSubscriptionBillingInfo(&$message = '', $params = []): bool {
+    // Resolve the recur ourselves rather than via the MJW begin… helper: that
+    // helper looks the recur up by processor_id/subscriptionId, which an offline
+    // ACH recur does not have (it would throw "Missing id or processor_id").
+    // Core hands us the recur id directly as contributionRecurID.
+    $recurID = (int) ($params['contributionRecurID'] ?? $params['id'] ?? 0);
+    if (empty($recurID)) {
+      throw new PaymentProcessorException('updateSubscriptionBillingInfo requires a contribution recur id.');
+    }
+
+    $recur = ContributionRecur::get(FALSE)
+      ->addSelect('id', 'contact_id', 'payment_token_id')
+      ->addWhere('id', '=', $recurID)
+      ->execute()
+      ->first();
+    if (empty($recur)) {
+      throw new PaymentProcessorException("ContributionRecur {$recurID} not found.");
+    }
+
+    // The submitted bank fields ride in as custom properties. Pin the token
+    // lookup/creation to the subscriber so the new account is always owned by
+    // the paying contact, whether a member or staff acting on their behalf
+    // submitted the form.
+    $propertyBag = \Civi\Payment\PropertyBag::cast($params);
+    $propertyBag->setContactID((int) $recur['contact_id']);
+
+    $oldTokenID = (int) ($recur['payment_token_id'] ?? 0);
+    $newTokenID = $this->resolvePaymentToken($propertyBag);
+
+    if ($newTokenID === $oldTokenID) {
+      // The same saved account was re-selected — nothing to move.
+      return TRUE;
+    }
+
+    ContributionRecur::update(FALSE)
+      ->addValue('payment_token_id', $newTokenID)
+      ->addWhere('id', '=', $recurID)
+      ->execute();
+
+    // Re-point drafts this recur has already queued but not yet settled. Only
+    // Pending contributions still on the old token need moving.
+    if ($oldTokenID) {
+      Contribution::update(FALSE)
+        ->addValue('ACH_Processor_Data.Bank_Account', $newTokenID)
+        ->addWhere('contribution_recur_id', '=', $recurID)
+        ->addWhere('contribution_status_id:name', '=', 'Pending')
+        ->addWhere('ACH_Processor_Data.Bank_Account', '=', $oldTokenID)
+        ->execute();
+    }
+
+    return TRUE;
+  }
+
+  /**
    * Resolve or create a PaymentToken for this transaction.
    *
    * Returns the PaymentToken ID. If an existing saved bank account was
@@ -561,8 +637,12 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       ->execute()
       ->first();
 
-    $accountName = $propertyBag->getCustomProperty('bank_name')
-      ?? ($contact['display_name'] . ' Bank Account');
+    // bank_name is optional — the billing-update form may omit it entirely, so
+    // getCustomProperty would throw on an absent key. Fall back to a label built
+    // from the contact when it's missing or blank.
+    $accountName = ($propertyBag->has('bank_name') && $propertyBag->getCustomProperty('bank_name'))
+      ? $propertyBag->getCustomProperty('bank_name')
+      : ($contact['display_name'] . ' Bank Account');
 
     $crypto = \Civi::service('crypto.token');
     $bankAccount = NULL;

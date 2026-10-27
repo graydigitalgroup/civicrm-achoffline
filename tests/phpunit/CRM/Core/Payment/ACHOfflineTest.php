@@ -375,6 +375,80 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
   }
 
   /**
+   * Switching the bank account on a recur mints a new token for the contact,
+   * repoints the recur at it, and moves any Pending draft the recur has already
+   * queued onto the new token (so the NACHA export pulls the new account).
+   */
+  public function testUpdateSubscriptionBillingInfoSwitchesBankAndRestampsPending(): void {
+    $recurID = $this->createRecur(12);
+    $pendingID = $this->createContribution($recurID, 'Pending');
+    // Stamp the existing draft with the recur's current (old) token.
+    Contribution::update(FALSE)
+      ->addValue('ACH_Processor_Data.Bank_Account', $this->tokenID)
+      ->addWhere('id', '=', $pendingID)
+      ->execute();
+
+    $message = '';
+    $this->processor->updateSubscriptionBillingInfo($message, [
+      'contributionRecurID' => $recurID,
+      'account_holder' => 'ACH Recur Tester',
+      'bank_account_number' => '000111222333',
+      'bank_identification_number' => '021000021',
+      'bank_account_type' => 'CHECKING',
+    ]);
+
+    $newTokenID = (int) ContributionRecur::get(FALSE)
+      ->addSelect('payment_token_id')
+      ->addWhere('id', '=', $recurID)
+      ->execute()
+      ->first()['payment_token_id'];
+    $this->assertNotEquals($this->tokenID, $newTokenID, 'the recur was repointed to a new token');
+
+    $owner = PaymentToken::get(FALSE)
+      ->addSelect('contact_id')
+      ->addWhere('id', '=', $newTokenID)
+      ->execute()
+      ->first();
+    $this->assertEquals($this->contactID, $owner['contact_id'], 'the new token belongs to the subscriber');
+
+    $stamp = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $pendingID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($newTokenID, $stamp, 'the pending draft was moved onto the new token');
+  }
+
+  /**
+   * Only Pending drafts are moved. A contribution that has already settled keeps
+   * the token it was drafted on, so the ledger/NACHA history stays accurate.
+   */
+  public function testUpdateSubscriptionBillingInfoLeavesSettledDraftsAlone(): void {
+    $recurID = $this->createRecur(12);
+    $settledID = $this->createContribution($recurID, 'Completed');
+    Contribution::update(FALSE)
+      ->addValue('ACH_Processor_Data.Bank_Account', $this->tokenID)
+      ->addWhere('id', '=', $settledID)
+      ->execute();
+
+    $message = '';
+    $this->processor->updateSubscriptionBillingInfo($message, [
+      'contributionRecurID' => $recurID,
+      'account_holder' => 'ACH Recur Tester',
+      'bank_account_number' => '000999888777',
+      'bank_identification_number' => '021000021',
+      'bank_account_type' => 'CHECKING',
+    ]);
+
+    $stamp = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $settledID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $stamp, 'a settled contribution keeps its original token');
+  }
+
+  /**
    * Create a standalone (non-recurring) Pending EFT contribution for a contact.
    */
   private function createStandaloneContribution(int $contactID): int {
