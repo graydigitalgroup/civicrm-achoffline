@@ -251,6 +251,115 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
   }
 
   /**
+   * A submitted saved-token id that belongs to a different contact must be
+   * rejected rather than drafted against this contribution. doPayment runs
+   * perms-off, so this scoping has to happen in the processor itself.
+   */
+  public function testDoPaymentRejectsAnotherContactsToken(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    // A token owned by a *different* contact.
+    $otherContactID = Contact::create(FALSE)
+      ->addValue('contact_type', 'Individual')
+      ->addValue('display_name', 'Someone Else')
+      ->execute()
+      ->first()['id'];
+    $otherTokenID = PaymentToken::create(FALSE)
+      ->addValue('contact_id', $otherContactID)
+      ->addValue('payment_processor_id', $this->processorID)
+      ->addValue('token', 'ach-other-contact-token')
+      ->execute()
+      ->first()['id'];
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-reject-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $otherTokenID,
+      'installments' => 1,
+      // Supply billing so that, if the contact guard were missing, doPayment
+      // would run all the way through and stamp the foreign token - making the
+      // failure a clean fail() here rather than an unrelated downstream error.
+      'billingStreetAddress' => '123 Test St',
+      'billingCity' => 'Austin',
+      'billingStateProvince' => 'TX',
+      'billingPostalCode' => '78701',
+      'billingCountry' => 'US',
+    ];
+
+    try {
+      $this->processor->doPayment($params);
+      $this->fail('doPayment accepted a bank token belonging to another contact');
+    }
+    catch (\Civi\Payment\Exception\PaymentProcessorException $e) {
+      // Expected - the token did not resolve for the paying contact.
+    }
+
+    // The foreign token must not have been written onto the contribution.
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertNotEquals($otherTokenID, $bankAccount, 'another contact\'s token was not stamped on the contribution');
+  }
+
+  /**
+   * The paying contact's own saved bank token resolves and is stamped on the
+   * contribution, leaving it Pending for the NACHA sweep - the guard must not
+   * block legitimate use.
+   */
+  public function testDoPaymentAcceptsOwnToken(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-accept-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $this->tokenID,
+      'installments' => 1,
+      // Billing block - doPayment reads these unconditionally when building the
+      // gateway args; PropertyBag drops empty strings, so send real values.
+      'billingStreetAddress' => '123 Test St',
+      'billingCity' => 'Austin',
+      'billingStateProvince' => 'TX',
+      'billingPostalCode' => '78701',
+      'billingCountry' => 'US',
+    ];
+
+    $result = $this->processor->doPayment($params);
+
+    $this->assertEquals('Pending', $result['payment_status'], 'ACH draft stays Pending for the NACHA sweep');
+
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $bankAccount, 'the contact\'s own token is stamped on the contribution');
+  }
+
+  /**
+   * Create a standalone (non-recurring) Pending EFT contribution for a contact.
+   */
+  private function createStandaloneContribution(int $contactID): int {
+    return Contribution::create(FALSE)
+      ->addValue('contact_id', $contactID)
+      ->addValue('financial_type_id:name', 'Donation')
+      ->addValue('total_amount', 25)
+      ->addValue('currency', 'USD')
+      ->addValue('contribution_status_id:name', 'Pending')
+      ->addValue('receive_date', date('Y-m-d'))
+      ->addValue('payment_instrument_id:name', 'EFT')
+      ->execute()
+      ->first()['id'];
+  }
+
+  /**
    * Create a recurring contribution for the ACH processor.
    */
   private function createRecur(int $installments): int {

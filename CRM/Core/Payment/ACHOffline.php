@@ -511,21 +511,27 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     if ($propertyBag->has('paymentToken')
       && !empty($propertyBag->getPaymentToken())) {
       $tokenID = (int) $propertyBag->getPaymentToken();
+      // doPayment runs with checkPermissions off, so the PaymentToken
+      // API-authorize guard that normally scopes token reads to the owning
+      // contact does not fire here. Without an explicit contact clause any
+      // token id submitted on the form would resolve and be drafted against
+      // this contribution, letting one contact's bank account be used to pay
+      // another's. Scope the lookup to the paying contact so a token can only
+      // be used by the contact that owns it.
       $token = PaymentToken::get(FALSE)
         ->addSelect('id')
-        ->setWhere([
-          ['id', '=', $tokenID],
-          ['OR', [
-            ['expiry_date', 'IS NULL'],
-            ['expiry_date', '>=', date('Y-m-d')],
-          ]],
-        ])
+        ->addWhere('id', '=', $tokenID)
+        ->addWhere('contact_id', '=', $propertyBag->getContactID())
+        ->addClause('OR',
+          ['expiry_date', 'IS NULL'],
+          ['expiry_date', '>=', date('Y-m-d')]
+        )
         ->execute()
         ->first();
 
       if (empty($token)) {
         throw new PaymentProcessorException(
-          'The selected bank account has expired. Please enter new account details.', 1001
+          'The selected bank account is not available. Please enter new account details.', 1001
         );
       }
 
