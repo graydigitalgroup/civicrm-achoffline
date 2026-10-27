@@ -32,16 +32,39 @@ class ContributionReissuedEvent extends GenericHookEvent {
 
   private ?int $feeLineItemID;
 
+  private float $feeAmount;
+
+  private ?string $returnReason;
+
   public function __construct(
     int $originalContributionID,
     int $newContributionID,
     array $lineItemMap,
-    ?int $feeLineItemID
+    ?int $feeLineItemID,
+    float $feeAmount = 0.0,
+    ?string $returnReason = NULL
   ) {
     $this->originalContributionID = $originalContributionID;
     $this->newContributionID = $newContributionID;
     $this->lineItemMap = $lineItemMap;
     $this->feeLineItemID = $feeLineItemID;
+    $this->feeAmount = $feeAmount;
+    $this->returnReason = $returnReason;
+  }
+
+  /**
+   * The NSF fee added to the reissue (0 when no fee line was added).
+   */
+  public function getFeeAmount(): float {
+    return $this->feeAmount;
+  }
+
+  /**
+   * The bank return reason entered by staff (e.g. an R-code such as R01), or
+   * NULL when none was given.
+   */
+  public function getReturnReason(): ?string {
+    return $this->returnReason;
   }
 
   /**

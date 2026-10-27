@@ -30,7 +30,10 @@ class ContributionReversedEvent extends GenericHookEvent {
 
   private string $reason;
 
-  public function __construct(int $contributionID, bool $wasPaid, string $reason) {
+  private ?string $returnReason;
+
+  public function __construct(int $contributionID, bool $wasPaid, string $reason, ?string $returnReason = NULL) {
+    $this->returnReason = $returnReason;
     $this->contributionID = $contributionID;
     $this->wasPaid = $wasPaid;
     $this->reason = $reason;
@@ -56,6 +59,14 @@ class ContributionReversedEvent extends GenericHookEvent {
    */
   public function getReason(): string {
     return $this->reason;
+  }
+
+  /**
+   * The bank return reason entered by staff (e.g. an R-code such as R01), or
+   * NULL when none was given.
+   */
+  public function getReturnReason(): ?string {
+    return $this->returnReason;
   }
 
 }

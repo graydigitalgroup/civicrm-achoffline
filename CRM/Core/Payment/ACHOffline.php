@@ -709,13 +709,7 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
    * @throws \CRM_Core_Exception
    */
   private function recurHasOpenReissue(int $recurID): bool {
-    return (bool) Contribution::get(FALSE)
-      ->selectRowCount()
-      ->addWhere('contribution_recur_id', '=', $recurID)
-      ->addWhere('ACH_Processor_Data.NSF_Reissued_From', 'IS NOT NULL')
-      ->addWhere('contribution_status_id:name', 'IN', ['Pending', 'Partially paid'])
-      ->execute()
-      ->count();
+    return !empty(CRM_ACHOffline_BAO_NsfReversal::getOpenReissueIds($recurID));
   }
 
   /**

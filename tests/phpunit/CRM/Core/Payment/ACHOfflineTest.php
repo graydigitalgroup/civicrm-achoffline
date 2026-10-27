@@ -1,5 +1,7 @@
 <?php
 
+use Civi\ACHOffline\Event\ContributionReissuedEvent;
+use Civi\ACHOffline\Event\ContributionReversedEvent;
 use Civi\Api4\Contact;
 use Civi\Api4\Contribution;
 use Civi\Api4\ContributionRecur;
@@ -250,6 +252,141 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
     $this->assertContributionCount(2, $recurID, 'cron did not stack a new installment on the open reissue');
   }
 
+  public function testGetOpenReissueIds(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '');
+    $recurID = $this->createRecur(0);
+    $this->assertSame([], CRM_ACHOffline_BAO_NsfReversal::getOpenReissueIds($recurID));
+
+    $originalID = $this->createContribution($recurID, 'Completed');
+    $newID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($originalID)['new_id'];
+    $this->assertSame([$newID], CRM_ACHOffline_BAO_NsfReversal::getOpenReissueIds($recurID));
+
+    Contribution::update(FALSE)
+      ->addValue('contribution_status_id:name', 'Cancelled')
+      ->addWhere('id', '=', $newID)
+      ->execute();
+    $this->assertSame([], CRM_ACHOffline_BAO_NsfReversal::getOpenReissueIds($recurID));
+  }
+
+  public function testReverseNsfSkipsNonAchContribution(): void {
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed', FALSE);
+
+    $res = CRM_ACHOffline_BAO_NsfReversal::reverse($originalID);
+
+    $this->assertTrue($res['skipped']);
+    $this->assertNotEmpty($res['skip_reason']);
+    $this->assertNull($res['new_id']);
+    $status = Contribution::get(FALSE)
+      ->addSelect('contribution_status_id:name')
+      ->addWhere('id', '=', $originalID)
+      ->execute()
+      ->first()['contribution_status_id:name'];
+    $this->assertEquals('Completed', $status, 'non-ACH contribution is untouched');
+  }
+
+  public function testReverseNsfFeeAmountParam(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '10');
+    $recurID = $this->createRecur(0);
+
+    $cases = [
+      [NULL, 35.0],
+      [0, 25.0],
+      [15, 40.0],
+    ];
+    foreach ($cases as [$feeAmount, $expectedTotal]) {
+      $originalID = $this->createContribution($recurID, 'Completed');
+      $params = ['checkPermissions' => FALSE, 'where' => [['id', '=', $originalID]]];
+      if ($feeAmount !== NULL) {
+        $params['feeAmount'] = $feeAmount;
+      }
+      $res = civicrm_api4('Contribution', 'reverseNsf', $params)->first();
+
+      $this->assertNull($res['error']);
+      $this->assertEquals($expectedTotal - 25, $res['fee_amount']);
+      $total = Contribution::get(FALSE)
+        ->addSelect('total_amount')
+        ->addWhere('id', '=', $res['new_id'])
+        ->execute()
+        ->first()['total_amount'];
+      $this->assertEquals($expectedTotal, (float) $total, 'feeAmount ' . var_export($feeAmount, TRUE));
+    }
+  }
+
+  public function testSecondReturnAddsNoFeeAndIsNotRedrafted(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '10');
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+    $firstID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($originalID)['new_id'];
+    Contribution::update(FALSE)
+      ->addValue('contribution_status_id:name', 'Completed')
+      ->addWhere('id', '=', $firstID)
+      ->execute();
+
+    $res = CRM_ACHOffline_BAO_NsfReversal::reverse($firstID, 10);
+
+    $this->assertEquals(0, $res['fee_amount']);
+    $second = Contribution::get(FALSE)
+      ->addSelect('total_amount', 'ACH_Processor_Data.Bank_Account', 'ACH_Processor_Data.NSF_Reissued_From')
+      ->addWhere('id', '=', $res['new_id'])
+      ->execute()
+      ->first();
+    $this->assertEquals(35, (float) $second['total_amount'], 'first fee carried, no second fee');
+    $this->assertEmpty($second['ACH_Processor_Data.Bank_Account'], 'not redrafted by ACH');
+    $this->assertEquals($firstID, $second['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
+  public function testReverseNsfRejectsNegativeFee(): void {
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+
+    $this->expectException(\CRM_Core_Exception::class);
+    civicrm_api4('Contribution', 'reverseNsf', [
+      'checkPermissions' => FALSE,
+      'where' => [['id', '=', $originalID]],
+      'feeAmount' => -1,
+    ]);
+  }
+
+  public function testReverseNsfPassesFeeAndReasonToEvents(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '10');
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+
+    $captured = [];
+    $onReissued = function ($e) use (&$captured) {
+      $captured['reissued'] = [$e->getFeeAmount(), $e->getReturnReason()];
+    };
+    $onReversed = function ($e) use (&$captured) {
+      $captured['reversed'] = $e->getReturnReason();
+    };
+    $dispatcher = \Civi::dispatcher();
+    $dispatcher->addListener(ContributionReissuedEvent::NAME, $onReissued);
+    $dispatcher->addListener(ContributionReversedEvent::NAME, $onReversed);
+    try {
+      civicrm_api4('Contribution', 'reverseNsf', [
+        'checkPermissions' => FALSE,
+        'where' => [['id', '=', $originalID]],
+        'feeAmount' => 12.5,
+        'reason' => 'R01',
+      ]);
+    }
+    finally {
+      $dispatcher->removeListener(ContributionReissuedEvent::NAME, $onReissued);
+      $dispatcher->removeListener(ContributionReversedEvent::NAME, $onReversed);
+    }
+
+    $this->assertEquals([12.5, 'R01'], $captured['reissued']);
+    $this->assertEquals('R01', $captured['reversed']);
+
+    $cancelReason = Contribution::get(FALSE)
+      ->addSelect('cancel_reason')
+      ->addWhere('id', '=', $originalID)
+      ->execute()
+      ->first()['cancel_reason'];
+    $this->assertStringContainsString('R01', $cancelReason);
+  }
+
   /**
    * Create a recurring contribution for the ACH processor.
    */
@@ -288,8 +425,9 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
   /**
    * Create a contribution linked to the recur (the template for repeattransaction).
    */
-  private function createContribution(int $recurID, string $status): int {
+  private function createContribution(int $recurID, string $status, bool $withBankAccount = TRUE): int {
     return Contribution::create(FALSE)
+      ->addValue('ACH_Processor_Data.Bank_Account', $withBankAccount ? $this->tokenID : NULL)
       ->addValue('contact_id', $this->contactID)
       ->addValue('financial_type_id:name', 'Donation')
       ->addValue('total_amount', 25)

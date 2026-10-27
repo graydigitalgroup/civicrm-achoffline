@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<menu>
+  <item>
+    <path>civicrm/contribute/reverse-nsf</path>
+    <page_callback>CRM_ACHOffline_Form_ReverseNsf</page_callback>
+    <title>Reverse (NSF / Returned Payment)</title>
+    <access_arguments>edit contributions</access_arguments>
+  </item>
+</menu>
