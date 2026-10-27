@@ -344,6 +344,37 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
   }
 
   /**
+   * ACH draws on routing + account number, not a billing address, and the
+   * contact here has none on file. doPayment must still succeed (stamping the
+   * token and staying Pending) rather than throwing on an unset billing getter.
+   */
+  public function testDoPaymentSucceedsWithoutBillingAddress(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-nobilling-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $this->tokenID,
+      'installments' => 1,
+      // No billing block supplied, and the contact has no address.
+    ];
+
+    $result = $this->processor->doPayment($params);
+
+    $this->assertEquals('Pending', $result['payment_status'], 'ACH draft stays Pending without a billing address');
+
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $bankAccount, 'token stamped even with no address on file');
+  }
+
+  /**
    * Create a standalone (non-recurring) Pending EFT contribution for a contact.
    */
   private function createStandaloneContribution(int $contactID): int {

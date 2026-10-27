@@ -250,11 +250,16 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
       'currency'           => $propertyBag->getCurrency(),
       'first_name'         => $propertyBag->has('firstName') ? $propertyBag->getFirstName() : '',
       'last_name'          => $propertyBag->has('lastName') ? $propertyBag->getLastName() : '',
-      'street_address'     => $propertyBag->getBillingStreetAddress(),
-      'city'               => $propertyBag->getBillingCity(),
-      'state'              => $propertyBag->getBillingStateProvince(),
-      'postal_code'        => $propertyBag->getBillingPostalCode(),
-      'country'            => $propertyBag->getBillingCountry(),
+      // Billing is optional here: ACH draws on routing + account number, and for
+      // an offline payment these args are only handed to the
+      // alterPaymentProcessorParams hook, never sent anywhere. Guard each read so
+      // a contact with no address on file doesn't make doPayment throw (an unset
+      // PropertyBag property raises BadMethodCallException on a bare getter).
+      'street_address'     => $propertyBag->has('billingStreetAddress') ? $propertyBag->getBillingStreetAddress() : '',
+      'city'               => $propertyBag->has('billingCity') ? $propertyBag->getBillingCity() : '',
+      'state'              => $propertyBag->has('billingStateProvince') ? $propertyBag->getBillingStateProvince() : '',
+      'postal_code'        => $propertyBag->has('billingPostalCode') ? $propertyBag->getBillingPostalCode() : '',
+      'country'            => $propertyBag->has('billingCountry') ? $propertyBag->getBillingCountry() : '',
       'email'              => $propertyBag->has('email') ? $propertyBag->getEmail() : '',
       'ip_address'         => $paymentParams['ip_address'] ?? '',
       'accounting_code'    => $paymentParams['contributionType_accounting_code'] ?? '',
