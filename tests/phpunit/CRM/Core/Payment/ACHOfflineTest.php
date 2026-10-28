@@ -251,6 +251,220 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
   }
 
   /**
+   * A submitted saved-token id that belongs to a different contact must be
+   * rejected rather than drafted against this contribution. doPayment runs
+   * perms-off, so this scoping has to happen in the processor itself.
+   */
+  public function testDoPaymentRejectsAnotherContactsToken(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    // A token owned by a *different* contact.
+    $otherContactID = Contact::create(FALSE)
+      ->addValue('contact_type', 'Individual')
+      ->addValue('display_name', 'Someone Else')
+      ->execute()
+      ->first()['id'];
+    $otherTokenID = PaymentToken::create(FALSE)
+      ->addValue('contact_id', $otherContactID)
+      ->addValue('payment_processor_id', $this->processorID)
+      ->addValue('token', 'ach-other-contact-token')
+      ->execute()
+      ->first()['id'];
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-reject-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $otherTokenID,
+      'installments' => 1,
+      // Supply billing so that, if the contact guard were missing, doPayment
+      // would run all the way through and stamp the foreign token - making the
+      // failure a clean fail() here rather than an unrelated downstream error.
+      'billingStreetAddress' => '123 Test St',
+      'billingCity' => 'Austin',
+      'billingStateProvince' => 'TX',
+      'billingPostalCode' => '78701',
+      'billingCountry' => 'US',
+    ];
+
+    try {
+      $this->processor->doPayment($params);
+      $this->fail('doPayment accepted a bank token belonging to another contact');
+    }
+    catch (\Civi\Payment\Exception\PaymentProcessorException $e) {
+      // Expected - the token did not resolve for the paying contact.
+    }
+
+    // The foreign token must not have been written onto the contribution.
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertNotEquals($otherTokenID, $bankAccount, 'another contact\'s token was not stamped on the contribution');
+  }
+
+  /**
+   * The paying contact's own saved bank token resolves and is stamped on the
+   * contribution, leaving it Pending for the NACHA sweep - the guard must not
+   * block legitimate use.
+   */
+  public function testDoPaymentAcceptsOwnToken(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-accept-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $this->tokenID,
+      'installments' => 1,
+      // Billing block - doPayment reads these unconditionally when building the
+      // gateway args; PropertyBag drops empty strings, so send real values.
+      'billingStreetAddress' => '123 Test St',
+      'billingCity' => 'Austin',
+      'billingStateProvince' => 'TX',
+      'billingPostalCode' => '78701',
+      'billingCountry' => 'US',
+    ];
+
+    $result = $this->processor->doPayment($params);
+
+    $this->assertEquals('Pending', $result['payment_status'], 'ACH draft stays Pending for the NACHA sweep');
+
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $bankAccount, 'the contact\'s own token is stamped on the contribution');
+  }
+
+  /**
+   * ACH draws on routing + account number, not a billing address, and the
+   * contact here has none on file. doPayment must still succeed (stamping the
+   * token and staying Pending) rather than throwing on an unset billing getter.
+   */
+  public function testDoPaymentSucceedsWithoutBillingAddress(): void {
+    $contributionID = $this->createStandaloneContribution($this->contactID);
+
+    $params = [
+      'amount' => 25,
+      'currency' => 'USD',
+      'invoiceID' => 'inv-nobilling-' . $contributionID,
+      'contactID' => $this->contactID,
+      'contributionID' => $contributionID,
+      'paymentToken' => $this->tokenID,
+      'installments' => 1,
+      // No billing block supplied, and the contact has no address.
+    ];
+
+    $result = $this->processor->doPayment($params);
+
+    $this->assertEquals('Pending', $result['payment_status'], 'ACH draft stays Pending without a billing address');
+
+    $bankAccount = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $bankAccount, 'token stamped even with no address on file');
+  }
+
+  /**
+   * Switching the bank account on a recur mints a new token for the contact,
+   * repoints the recur at it, and moves any Pending draft the recur has already
+   * queued onto the new token (so the NACHA export pulls the new account).
+   */
+  public function testUpdateSubscriptionBillingInfoSwitchesBankAndRestampsPending(): void {
+    $recurID = $this->createRecur(12);
+    $pendingID = $this->createContribution($recurID, 'Pending');
+    // Stamp the existing draft with the recur's current (old) token.
+    Contribution::update(FALSE)
+      ->addValue('ACH_Processor_Data.Bank_Account', $this->tokenID)
+      ->addWhere('id', '=', $pendingID)
+      ->execute();
+
+    $message = '';
+    $this->processor->updateSubscriptionBillingInfo($message, [
+      'contributionRecurID' => $recurID,
+      'account_holder' => 'ACH Recur Tester',
+      'bank_account_number' => '000111222333',
+      'bank_identification_number' => '021000021',
+      'bank_account_type' => 'CHECKING',
+    ]);
+
+    $newTokenID = (int) ContributionRecur::get(FALSE)
+      ->addSelect('payment_token_id')
+      ->addWhere('id', '=', $recurID)
+      ->execute()
+      ->first()['payment_token_id'];
+    $this->assertNotEquals($this->tokenID, $newTokenID, 'the recur was repointed to a new token');
+
+    $owner = PaymentToken::get(FALSE)
+      ->addSelect('contact_id')
+      ->addWhere('id', '=', $newTokenID)
+      ->execute()
+      ->first();
+    $this->assertEquals($this->contactID, $owner['contact_id'], 'the new token belongs to the subscriber');
+
+    $stamp = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $pendingID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($newTokenID, $stamp, 'the pending draft was moved onto the new token');
+  }
+
+  /**
+   * Only Pending drafts are moved. A contribution that has already settled keeps
+   * the token it was drafted on, so the ledger/NACHA history stays accurate.
+   */
+  public function testUpdateSubscriptionBillingInfoLeavesSettledDraftsAlone(): void {
+    $recurID = $this->createRecur(12);
+    $settledID = $this->createContribution($recurID, 'Completed');
+    Contribution::update(FALSE)
+      ->addValue('ACH_Processor_Data.Bank_Account', $this->tokenID)
+      ->addWhere('id', '=', $settledID)
+      ->execute();
+
+    $message = '';
+    $this->processor->updateSubscriptionBillingInfo($message, [
+      'contributionRecurID' => $recurID,
+      'account_holder' => 'ACH Recur Tester',
+      'bank_account_number' => '000999888777',
+      'bank_identification_number' => '021000021',
+      'bank_account_type' => 'CHECKING',
+    ]);
+
+    $stamp = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $settledID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    $this->assertEquals($this->tokenID, $stamp, 'a settled contribution keeps its original token');
+  }
+
+  /**
+   * Create a standalone (non-recurring) Pending EFT contribution for a contact.
+   */
+  private function createStandaloneContribution(int $contactID): int {
+    return Contribution::create(FALSE)
+      ->addValue('contact_id', $contactID)
+      ->addValue('financial_type_id:name', 'Donation')
+      ->addValue('total_amount', 25)
+      ->addValue('currency', 'USD')
+      ->addValue('contribution_status_id:name', 'Pending')
+      ->addValue('receive_date', date('Y-m-d'))
+      ->addValue('payment_instrument_id:name', 'EFT')
+      ->execute()
+      ->first()['id'];
+  }
+
+  /**
    * Create a recurring contribution for the ACH processor.
    */
   private function createRecur(int $installments): int {
