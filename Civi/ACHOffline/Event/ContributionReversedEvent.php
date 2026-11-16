@@ -10,8 +10,7 @@ use Civi\Core\Event\GenericHookEvent;
  * The reversal itself — cancelling the original contribution and letting core
  * unwind its financial items — is already done by the time this fires. This
  * event exists so a consumer can reverse its OWN records that hang off the
- * contribution and that core knows nothing about (soft credits by line item,
- * bill-to bridges, etc.).
+ * contribution and that core knows nothing about.
  *
  * wasPaid tells a consumer whether real money had been recorded against the
  * original: if TRUE it should write an offsetting (negative) reversal so the

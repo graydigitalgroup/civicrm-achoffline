@@ -94,6 +94,10 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
       ->first()['id'];
 
     $this->processor = \Civi\Payment\System::singleton()->getById($this->processorID);
+
+    foreach (['achoffline_nsf_repeat_return_fee', 'achoffline_nsf_max_redrafts', 'achoffline_nsf_hold_recur'] as $setting) {
+      \Civi::settings()->revert($setting);
+    }
   }
 
   /**
@@ -334,6 +338,63 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
     $this->assertEquals(35, (float) $second['total_amount'], 'first fee carried, no second fee');
     $this->assertEmpty($second['ACH_Processor_Data.Bank_Account'], 'not redrafted by ACH');
     $this->assertEquals($firstID, $second['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
+  public function testRepeatReturnFeeSetting(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '10');
+    \Civi::settings()->set('achoffline_nsf_repeat_return_fee', TRUE);
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+    $firstID = $this->reverseAndComplete($originalID);
+
+    $res = CRM_ACHOffline_BAO_NsfReversal::reverse($firstID);
+
+    $this->assertEquals(10, $res['fee_amount']);
+    $total = Contribution::get(FALSE)
+      ->addSelect('total_amount')
+      ->addWhere('id', '=', $res['new_id'])
+      ->execute()
+      ->first()['total_amount'];
+    $this->assertEquals(45, (float) $total);
+  }
+
+  public function testMaxRedraftsSetting(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '');
+    \Civi::settings()->set('achoffline_nsf_max_redrafts', 2);
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+
+    $firstID = $this->reverseAndComplete($originalID);
+    $this->assertEquals($this->tokenID, $this->getBankAccount($firstID));
+    $secondID = $this->reverseAndComplete($firstID);
+    $this->assertEquals($this->tokenID, $this->getBankAccount($secondID));
+    $thirdID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($secondID)['new_id'];
+    $this->assertEmpty($this->getBankAccount($thirdID));
+    $this->assertSame(2, CRM_ACHOffline_BAO_NsfReversal::getPriorReturnCount(['ACH_Processor_Data.NSF_Reissued_From' => $secondID]));
+  }
+
+  public function testZeroMaxRedraftsNeverRedrafts(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '');
+    \Civi::settings()->set('achoffline_nsf_max_redrafts', 0);
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+
+    $newID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($originalID)['new_id'];
+
+    $this->assertEmpty($this->getBankAccount($newID));
+  }
+
+  public function testCronCreatesInstallmentWhenHoldIsOff(): void {
+    \Civi::settings()->set('achoffline_nsf_fee_amount', '');
+    \Civi::settings()->set('achoffline_nsf_hold_recur', FALSE);
+    $recurID = $this->createRecur(0);
+    $originalID = $this->createContribution($recurID, 'Completed');
+    CRM_ACHOffline_BAO_NsfReversal::reverse($originalID);
+
+    $this->makeDue($recurID, 'In Progress');
+    $this->processor->handlePaymentCron();
+
+    $this->assertContributionCount(3, $recurID, 'cron created the next installment alongside the open reissue');
   }
 
   public function testReverseNsfRejectsNegativeFee(): void {
@@ -652,6 +713,24 @@ class CRM_Core_Payment_ACHOfflineTest extends \PHPUnit\Framework\TestCase implem
       ->addValue('payment_instrument_id:name', 'EFT')
       ->execute()
       ->first()['id'];
+  }
+
+  private function reverseAndComplete(int $contributionID): int {
+    $newID = (int) CRM_ACHOffline_BAO_NsfReversal::reverse($contributionID)['new_id'];
+    Contribution::update(FALSE)
+      ->addValue('contribution_status_id:name', 'Completed')
+      ->addWhere('id', '=', $newID)
+      ->execute();
+    return $newID;
+  }
+
+  private function getBankAccount(int $contributionID): ?int {
+    $value = Contribution::get(FALSE)
+      ->addSelect('ACH_Processor_Data.Bank_Account')
+      ->addWhere('id', '=', $contributionID)
+      ->execute()
+      ->first()['ACH_Processor_Data.Bank_Account'] ?? NULL;
+    return $value ? (int) $value : NULL;
   }
 
   private function assertContributionCount(int $expected, int $recurID, string $message): void {

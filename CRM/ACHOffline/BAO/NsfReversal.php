@@ -18,9 +18,8 @@ use CRM_ACHOffline_ExtensionUtil as E;
  * financial operations (a contribution with a payment can't have its amount
  * changed) and lets staff collect it by any method.
  *
- * Consumers that track their own per-line records (soft credits, bill-to
- * bridges) react to the two events fired at the end; this class references none
- * of them.
+ * Extensions that keep their own records per line item react to the two events
+ * fired at the end; this class references none of them.
  */
 class CRM_ACHOffline_BAO_NsfReversal {
 
@@ -101,13 +100,41 @@ class CRM_ACHOffline_BAO_NsfReversal {
   }
 
   /**
-   * A reissue being returned again: no new fee, not redrafted.
+   * A reissue being returned again.
    *
    * @param array $contribution
    *   Needs ACH_Processor_Data.NSF_Reissued_From.
    */
   public static function isRepeatReturn(array $contribution): bool {
     return !empty($contribution['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
+  public static function getPriorReturnCount(array $contribution): int {
+    $count = 0;
+    $seen = [];
+    $parentID = (int) ($contribution['ACH_Processor_Data.NSF_Reissued_From'] ?? 0);
+    while ($parentID && !isset($seen[$parentID])) {
+      $seen[$parentID] = TRUE;
+      $count++;
+      $parent = Contribution::get(FALSE)
+        ->addSelect('ACH_Processor_Data.NSF_Reissued_From')
+        ->addWhere('id', '=', $parentID)
+        ->execute()
+        ->first();
+      $parentID = (int) ($parent['ACH_Processor_Data.NSF_Reissued_From'] ?? 0);
+    }
+    return $count;
+  }
+
+  public static function addsFee(array $contribution): bool {
+    return !self::isRepeatReturn($contribution)
+      || (bool) \Civi::settings()->get('achoffline_nsf_repeat_return_fee');
+  }
+
+  public static function isRedrafted(array $contribution): bool {
+    $max = \Civi::settings()->get('achoffline_nsf_max_redrafts');
+    $max = ($max === NULL || $max === '') ? 1 : max(0, (int) $max);
+    return self::getPriorReturnCount($contribution) < $max;
   }
 
   /**
@@ -151,9 +178,8 @@ class CRM_ACHOffline_BAO_NsfReversal {
 
     $transaction = new CRM_Core_Transaction();
     try {
-      $isRepeatReturn = self::isRepeatReturn($original);
-      $fee = $isRepeatReturn ? 0.0 : ($feeAmount ?? self::getFeeAmount());
-      $reissue = self::reissue($original, $fee, !$isRepeatReturn);
+      $fee = self::addsFee($original) ? ($feeAmount ?? self::getFeeAmount()) : 0.0;
+      $reissue = self::reissue($original, $fee, self::isRedrafted($original));
 
       // Cancel the original. On a Completed/Partially paid contribution core
       // records the reversing financial entries as part of this transition.
@@ -170,7 +196,7 @@ class CRM_ACHOffline_BAO_NsfReversal {
         ->execute();
 
       // Reissue is announced BEFORE reversal so a consumer can copy per-line
-      // records (soft credits, bridges) from the original onto the new
+      // records from the original onto the new
       // contribution while the original still has them, then react to the
       // original's reversal (which may remove those records).
       \Civi::dispatcher()->dispatch(
@@ -216,7 +242,7 @@ class CRM_ACHOffline_BAO_NsfReversal {
       'receive_date'            => date('Y-m-d H:i:s'),
       'source'                  => E::ts('NSF reissue of contribution #%1', [1 => $original['id']]),
       // Marker the recurring cron guard keys on; also carries the bank account
-      // forward on a first return so the reissue can be redrafted.
+      // forward when the reissue is to be redrafted.
       'ACH_Processor_Data.NSF_Reissued_From' => $original['id'],
       'ACH_Processor_Data.Bank_Account'      => $carryBankAccount ? ($original['ACH_Processor_Data.Bank_Account'] ?? NULL) : NULL,
     ];

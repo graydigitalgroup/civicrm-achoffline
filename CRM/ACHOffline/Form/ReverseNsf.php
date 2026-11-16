@@ -16,7 +16,7 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
    */
   protected array $eligibleIds = [];
 
-  protected int $firstReturnCount = 0;
+  protected int $feeCount = 0;
 
   public function preProcess(): void {
     $this->setTitle(E::ts('Reverse (NSF / Returned Payment)'));
@@ -38,11 +38,17 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
     $rows = [];
     foreach ($contributions as $contribution) {
       $skipReason = NsfReversal::getIneligibleReason($contribution);
-      $isRepeatReturn = NsfReversal::isRepeatReturn($contribution);
+      $notes = [];
       if ($skipReason === NULL) {
         $this->eligibleIds[] = (int) $contribution['id'];
-        if (!$isRepeatReturn) {
-          $this->firstReturnCount++;
+        if (NsfReversal::addsFee($contribution)) {
+          $this->feeCount++;
+        }
+        else {
+          $notes[] = E::ts('No fee');
+        }
+        if (!NsfReversal::isRedrafted($contribution)) {
+          $notes[] = E::ts('Not redrafted');
         }
       }
       $rows[] = [
@@ -52,12 +58,12 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
         'receive_date' => CRM_Utils_Date::customFormat($contribution['receive_date']),
         'status' => $contribution['contribution_status_id:label'],
         'skip_reason' => $skipReason,
-        'repeat_return' => $skipReason === NULL && $isRepeatReturn,
+        'note' => implode(', ', $notes),
       ];
     }
     $this->assign('rows', $rows);
     $this->assign('eligibleCount', count($this->eligibleIds));
-    $this->assign('firstReturnCount', $this->firstReturnCount);
+    $this->assign('feeCount', $this->feeCount);
   }
 
   public function buildQuickForm(): void {
@@ -79,7 +85,7 @@ class CRM_ACHOffline_Form_ReverseNsf extends CRM_Core_Form {
   }
 
   public function setDefaultValues(): array {
-    if ($this->firstReturnCount === 0) {
+    if ($this->feeCount === 0) {
       return ['fee_amount' => '0'];
     }
     $fee = \Civi::settings()->get('achoffline_nsf_fee_amount');

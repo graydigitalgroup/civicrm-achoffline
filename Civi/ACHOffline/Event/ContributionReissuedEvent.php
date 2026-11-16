@@ -14,9 +14,7 @@ use Civi\Core\Event\GenericHookEvent;
  * that lets a consumer re-point them accurately.
  *
  * feeLineItemID identifies the appended NSF-fee line (or NULL when no fee was
- * configured) so a consumer can tell it apart from the copied lines — a fee is
- * a real charge to the member, not something to soft-credit back to a third
- * party, so consumers should normally skip it.
+ * configured) so a consumer can tell it apart from the copied lines.
  *
  * Event name: civi.achoffline.contributionReissued (see self::NAME)
  */

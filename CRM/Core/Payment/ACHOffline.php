@@ -449,9 +449,9 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
     // Don't stack installments on top of a returned payment. If a prior
     // installment was reversed for insufficient funds and reissued as an open
     // contribution that is still owed, hold off on creating the next one until
-    // staff collect or close it — otherwise the member accrues installments
+    // staff collect or close it — otherwise the contact accrues installments
     // they never actually paid.
-    if ($this->recurHasOpenReissue((int) $recur['id'])) {
+    if (Civi::settings()->get('achoffline_nsf_hold_recur') && $this->recurHasOpenReissue((int) $recur['id'])) {
       Civi::log()->info('ACHOffline: skipping installment; recur has an open NSF reissue awaiting payment', [
         'contribution_recur_id' => $recur['id'],
       ]);
@@ -540,7 +540,7 @@ class CRM_Core_Payment_ACHOffline extends CRM_Core_Payment {
 
     // The submitted bank fields ride in as custom properties. Pin the token
     // lookup/creation to the subscriber so the new account is always owned by
-    // the paying contact, whether a member or staff acting on their behalf
+    // the paying contact, whether the contact or staff acting on their behalf
     // submitted the form.
     $propertyBag = \Civi\Payment\PropertyBag::cast($params);
     $propertyBag->setContactID((int) $recur['contact_id']);
