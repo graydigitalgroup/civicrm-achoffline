@@ -10,8 +10,7 @@ use Civi\Core\Event\GenericHookEvent;
  * The reversal itself — cancelling the original contribution and letting core
  * unwind its financial items — is already done by the time this fires. This
  * event exists so a consumer can reverse its OWN records that hang off the
- * contribution and that core knows nothing about (soft credits by line item,
- * bill-to bridges, etc.).
+ * contribution and that core knows nothing about.
  *
  * wasPaid tells a consumer whether real money had been recorded against the
  * original: if TRUE it should write an offsetting (negative) reversal so the
@@ -30,7 +29,10 @@ class ContributionReversedEvent extends GenericHookEvent {
 
   private string $reason;
 
-  public function __construct(int $contributionID, bool $wasPaid, string $reason) {
+  private ?string $returnReason;
+
+  public function __construct(int $contributionID, bool $wasPaid, string $reason, ?string $returnReason = NULL) {
+    $this->returnReason = $returnReason;
     $this->contributionID = $contributionID;
     $this->wasPaid = $wasPaid;
     $this->reason = $reason;
@@ -56,6 +58,14 @@ class ContributionReversedEvent extends GenericHookEvent {
    */
   public function getReason(): string {
     return $this->reason;
+  }
+
+  /**
+   * The bank return reason entered by staff (e.g. an R-code such as R01), or
+   * NULL when none was given.
+   */
+  public function getReturnReason(): ?string {
+    return $this->returnReason;
   }
 
 }

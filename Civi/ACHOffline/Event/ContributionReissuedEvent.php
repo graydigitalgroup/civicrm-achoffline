@@ -14,9 +14,7 @@ use Civi\Core\Event\GenericHookEvent;
  * that lets a consumer re-point them accurately.
  *
  * feeLineItemID identifies the appended NSF-fee line (or NULL when no fee was
- * configured) so a consumer can tell it apart from the copied lines — a fee is
- * a real charge to the member, not something to soft-credit back to a third
- * party, so consumers should normally skip it.
+ * configured) so a consumer can tell it apart from the copied lines.
  *
  * Event name: civi.achoffline.contributionReissued (see self::NAME)
  */
@@ -32,16 +30,39 @@ class ContributionReissuedEvent extends GenericHookEvent {
 
   private ?int $feeLineItemID;
 
+  private float $feeAmount;
+
+  private ?string $returnReason;
+
   public function __construct(
     int $originalContributionID,
     int $newContributionID,
     array $lineItemMap,
-    ?int $feeLineItemID
+    ?int $feeLineItemID,
+    float $feeAmount = 0.0,
+    ?string $returnReason = NULL
   ) {
     $this->originalContributionID = $originalContributionID;
     $this->newContributionID = $newContributionID;
     $this->lineItemMap = $lineItemMap;
     $this->feeLineItemID = $feeLineItemID;
+    $this->feeAmount = $feeAmount;
+    $this->returnReason = $returnReason;
+  }
+
+  /**
+   * The NSF fee added to the reissue (0 when no fee line was added).
+   */
+  public function getFeeAmount(): float {
+    return $this->feeAmount;
+  }
+
+  /**
+   * The bank return reason entered by staff (e.g. an R-code such as R01), or
+   * NULL when none was given.
+   */
+  public function getReturnReason(): ?string {
+    return $this->returnReason;
   }
 
   /**

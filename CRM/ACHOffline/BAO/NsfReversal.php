@@ -18,9 +18,8 @@ use CRM_ACHOffline_ExtensionUtil as E;
  * financial operations (a contribution with a payment can't have its amount
  * changed) and lets staff collect it by any method.
  *
- * Consumers that track their own per-line records (soft credits, bill-to
- * bridges) react to the two events fired at the end; this class references none
- * of them.
+ * Extensions that keep their own records per line item react to the two events
+ * fired at the end; this class references none of them.
  */
 class CRM_ACHOffline_BAO_NsfReversal {
 
@@ -29,6 +28,49 @@ class CRM_ACHOffline_BAO_NsfReversal {
    * the reversal against one of these is a no-op so the task is safe to re-run.
    */
   private const TERMINAL_STATUSES = ['Cancelled', 'Chargeback', 'Refunded', 'Failed'];
+
+  /**
+   * Statuses of a reissue that is still owed.
+   */
+  public const OPEN_REISSUE_STATUSES = ['Pending', 'Partially paid'];
+
+  /**
+   * IDs of open (still-owed) NSF reissues on a recur.
+   *
+   * @return int[]
+   *
+   * @throws \CRM_Core_Exception
+   */
+  public static function getOpenReissueIds(int $recurID): array {
+    return array_map('intval', Contribution::get(FALSE)
+      ->addSelect('id')
+      ->addWhere('contribution_recur_id', '=', $recurID)
+      ->addWhere('ACH_Processor_Data.NSF_Reissued_From', 'IS NOT NULL')
+      ->addWhere('contribution_status_id:name', 'IN', self::OPEN_REISSUE_STATUSES)
+      ->execute()
+      ->column('id'));
+  }
+
+  /**
+   * Common NACHA return reason codes.
+   *
+   * @link https://www.nacha.org/products/return-reason-code-guide
+   */
+  public static function getReturnReasonOptions(): array {
+    return [
+      'R01' => E::ts('R01 - Insufficient Funds'),
+      'R02' => E::ts('R02 - Account Closed'),
+      'R03' => E::ts('R03 - No Account / Unable to Locate Account'),
+      'R04' => E::ts('R04 - Invalid Account Number'),
+      'R07' => E::ts('R07 - Authorization Revoked by Customer'),
+      'R08' => E::ts('R08 - Payment Stopped'),
+      'R09' => E::ts('R09 - Uncollected Funds'),
+      'R10' => E::ts('R10 - Customer Advises Not Authorized'),
+      'R16' => E::ts('R16 - Account Frozen'),
+      'R20' => E::ts('R20 - Non-Transaction Account'),
+      'Other' => E::ts('Other'),
+    ];
+  }
 
   /**
    * Options for the reversed-contribution status setting. Both let core unwind
@@ -42,15 +84,82 @@ class CRM_ACHOffline_BAO_NsfReversal {
   }
 
   /**
+   * Why a contribution can't be reversed, or NULL when it can.
+   *
+   * @param array $contribution
+   *   Needs contribution_status_id:name and ACH_Processor_Data.Bank_Account.
+   */
+  public static function getIneligibleReason(array $contribution): ?string {
+    if (in_array($contribution['contribution_status_id:name'] ?? NULL, self::TERMINAL_STATUSES, TRUE)) {
+      return E::ts('Already reversed or closed.');
+    }
+    if (empty($contribution['ACH_Processor_Data.Bank_Account'])) {
+      return E::ts('Not an ACH contribution (no bank account).');
+    }
+    return NULL;
+  }
+
+  /**
+   * A reissue being returned again.
+   *
+   * @param array $contribution
+   *   Needs ACH_Processor_Data.NSF_Reissued_From.
+   */
+  public static function isRepeatReturn(array $contribution): bool {
+    return !empty($contribution['ACH_Processor_Data.NSF_Reissued_From']);
+  }
+
+  public static function getPriorReturnCount(array $contribution): int {
+    $count = 0;
+    $seen = [];
+    $parentID = (int) ($contribution['ACH_Processor_Data.NSF_Reissued_From'] ?? 0);
+    while ($parentID && !isset($seen[$parentID])) {
+      $seen[$parentID] = TRUE;
+      $count++;
+      $parent = Contribution::get(FALSE)
+        ->addSelect('ACH_Processor_Data.NSF_Reissued_From')
+        ->addWhere('id', '=', $parentID)
+        ->execute()
+        ->first();
+      $parentID = (int) ($parent['ACH_Processor_Data.NSF_Reissued_From'] ?? 0);
+    }
+    return $count;
+  }
+
+  public static function addsFee(array $contribution): bool {
+    return !self::isRepeatReturn($contribution)
+      || (bool) \Civi::settings()->get('achoffline_nsf_repeat_return_fee');
+  }
+
+  public static function isRedrafted(array $contribution): bool {
+    $max = \Civi::settings()->get('achoffline_nsf_max_redrafts');
+    $max = ($max === NULL || $max === '') ? 1 : max(0, (int) $max);
+    return self::getPriorReturnCount($contribution) < $max;
+  }
+
+  /**
    * Reverse and reissue a single contribution.
    *
-   * @return array{original_id:int,new_id:?int,was_paid:bool,skipped:bool}
+   * @param int $contributionID
+   * @param float|null $feeAmount
+   *   NSF fee to add to the reissue. NULL uses the achoffline_nsf_fee_amount
+   *   setting; 0 adds no fee line.
+   * @param string|null $reason
+   *   Bank return reason (e.g. an R-code such as R01), recorded on the
+   *   cancelled original and passed to event consumers.
+   *
+   * @return array{original_id:int,new_id:?int,was_paid:bool,skipped:bool,skip_reason:?string,fee_amount:?float}
    *
    * @throws \CRM_Core_Exception
    */
-  public static function reverse(int $contributionID): array {
+  public static function reverse(int $contributionID, ?float $feeAmount = NULL, ?string $reason = NULL): array {
+    if ($feeAmount !== NULL && $feeAmount < 0) {
+      throw new CRM_Core_Exception(E::ts('NSF fee amount cannot be negative.'));
+    }
+    $reason = ($reason === NULL || trim($reason) === '') ? NULL : trim($reason);
+
     $original = Contribution::get(FALSE)
-      ->addSelect('*', 'contribution_status_id:name', 'ACH_Processor_Data.Bank_Account')
+      ->addSelect('*', 'contribution_status_id:name', 'ACH_Processor_Data.Bank_Account', 'ACH_Processor_Data.NSF_Reissued_From')
       ->addWhere('id', '=', $contributionID)
       ->execute()
       ->first();
@@ -60,37 +169,43 @@ class CRM_ACHOffline_BAO_NsfReversal {
     }
 
     // Safe to re-run: a contribution already reversed is left untouched.
-    if (in_array($original['contribution_status_id:name'], self::TERMINAL_STATUSES, TRUE)) {
-      return ['original_id' => $contributionID, 'new_id' => NULL, 'was_paid' => FALSE, 'skipped' => TRUE];
+    $skipReason = self::getIneligibleReason($original);
+    if ($skipReason !== NULL) {
+      return ['original_id' => $contributionID, 'new_id' => NULL, 'was_paid' => FALSE, 'skipped' => TRUE, 'skip_reason' => $skipReason, 'fee_amount' => NULL];
     }
 
     $wasPaid = in_array($original['contribution_status_id:name'], ['Completed', 'Partially paid'], TRUE);
 
     $transaction = new CRM_Core_Transaction();
     try {
-      $reissue = self::reissue($original);
+      $fee = self::addsFee($original) ? ($feeAmount ?? self::getFeeAmount()) : 0.0;
+      $reissue = self::reissue($original, $fee, self::isRedrafted($original));
 
       // Cancel the original. On a Completed/Partially paid contribution core
       // records the reversing financial entries as part of this transition.
       $reversalStatus = \Civi::settings()->get('achoffline_nsf_reversal_status') ?: 'Cancelled';
+      $cancelReason = E::ts('Reversed (NSF / returned payment); reissued as contribution #%1.', [1 => $reissue['id']]);
+      if ($reason !== NULL) {
+        $cancelReason .= ' ' . E::ts('Return reason: %1.', [1 => $reason]);
+      }
       Contribution::update(FALSE)
         ->addValue('contribution_status_id:name', $reversalStatus)
         ->addValue('cancel_date', date('Y-m-d H:i:s'))
-        ->addValue('cancel_reason', E::ts('Reversed (NSF / returned payment); reissued as contribution #%1.', [1 => $reissue['id']]))
+        ->addValue('cancel_reason', $cancelReason)
         ->addWhere('id', '=', $contributionID)
         ->execute();
 
       // Reissue is announced BEFORE reversal so a consumer can copy per-line
-      // records (soft credits, bridges) from the original onto the new
+      // records from the original onto the new
       // contribution while the original still has them, then react to the
       // original's reversal (which may remove those records).
       \Civi::dispatcher()->dispatch(
         ContributionReissuedEvent::NAME,
-        new ContributionReissuedEvent($contributionID, $reissue['id'], $reissue['lineItemMap'], $reissue['feeLineItemId'])
+        new ContributionReissuedEvent($contributionID, $reissue['id'], $reissue['lineItemMap'], $reissue['feeLineItemId'], $fee, $reason)
       );
       \Civi::dispatcher()->dispatch(
         ContributionReversedEvent::NAME,
-        new ContributionReversedEvent($contributionID, $wasPaid, 'nsf')
+        new ContributionReversedEvent($contributionID, $wasPaid, 'nsf', $reason)
       );
     }
     catch (\Throwable $e) {
@@ -99,19 +214,18 @@ class CRM_ACHOffline_BAO_NsfReversal {
     }
     $transaction->commit();
 
-    return ['original_id' => $contributionID, 'new_id' => $reissue['id'], 'was_paid' => $wasPaid, 'skipped' => FALSE];
+    return ['original_id' => $contributionID, 'new_id' => $reissue['id'], 'was_paid' => $wasPaid, 'skipped' => FALSE, 'skip_reason' => NULL, 'fee_amount' => $fee];
   }
 
   /**
    * Create the open replacement contribution: clone the original's core fields
-   * and line items, then append the NSF-fee line when one is configured.
+   * and line items, then append the NSF-fee line when $fee is positive.
    *
    * @return array{id:int,lineItemMap:array<int,int>,feeLineItemId:?int}
    *
    * @throws \CRM_Core_Exception
    */
-  private static function reissue(array $original): array {
-    $fee = self::getFeeAmount();
+  private static function reissue(array $original, float $fee, bool $carryBankAccount): array {
     $originalTotal = (float) $original['total_amount'];
     $newTotal = $originalTotal + $fee;
 
@@ -128,9 +242,9 @@ class CRM_ACHOffline_BAO_NsfReversal {
       'receive_date'            => date('Y-m-d H:i:s'),
       'source'                  => E::ts('NSF reissue of contribution #%1', [1 => $original['id']]),
       // Marker the recurring cron guard keys on; also carries the bank account
-      // forward so the reissue can be redrafted against the same account.
+      // forward when the reissue is to be redrafted.
       'ACH_Processor_Data.NSF_Reissued_From' => $original['id'],
-      'ACH_Processor_Data.Bank_Account'      => $original['ACH_Processor_Data.Bank_Account'] ?? NULL,
+      'ACH_Processor_Data.Bank_Account'      => $carryBankAccount ? ($original['ACH_Processor_Data.Bank_Account'] ?? NULL) : NULL,
     ];
 
     $new = Contribution::create(FALSE)
@@ -213,8 +327,12 @@ class CRM_ACHOffline_BAO_NsfReversal {
     $financialTypeID = (int) (\Civi::settings()->get('achoffline_nsf_fee_financial_type_id')
       ?: $original['financial_type_id']);
     $label = \Civi::settings()->get('achoffline_nsf_fee_label') ?: E::ts('NSF / Returned Payment Fee');
+    $defaultPriceSet = CRM_Price_BAO_PriceSet::getDefaultPriceSet('contribution');
+    $priceField = reset($defaultPriceSet);
 
     $lineItem = LineItem::create(FALSE)
+      ->addValue('price_field_id', $priceField['priceFieldID'])
+      ->addValue('price_field_value_id', $priceField['priceFieldValueID'])
       ->addValue('entity_table', 'civicrm_contribution')
       ->addValue('entity_id', $contributionID)
       ->addValue('contribution_id', $contributionID)
