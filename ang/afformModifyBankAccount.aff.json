@@ -27,8 +27,8 @@
     "autosave_draft": false,
     "navigation": null,
     "modified_date": "2026-04-08 15:56:58",
-    "confirmation_type": "show_confirmation_message",
-    "confirmation_message": "Updated",
+    "confirmation_type": "redirect_to_url",
+    "confirmation_message": null,
     "created_id": 203,
     "locale": null
 }

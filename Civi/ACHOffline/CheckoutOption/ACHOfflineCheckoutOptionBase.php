@@ -125,9 +125,17 @@ abstract class ACHOfflineCheckoutOptionBase implements CheckoutOptionInterface, 
 
     $payment = $this->getQuickformProcessor($session->isTestMode())->doPayment($params);
 
-    // Payment should always return pending since it is handled offline
+    // ACH offline never captures funds at submit time — the contribution stays
+    // Pending so the NACHA export can sweep it later. pending() writes that
+    // Pending status to the contribution; success() then tells the Checkout
+    // framework the flow is finished. We must report success rather than
+    // pending because the framework treats "pending" as "still confirming" and
+    // leaves the form stuck on the "Confirming payment" message with no onward
+    // redirect — nothing ever advances the status, as continueCheckout() is a
+    // no-op for an offline payment.
     if ($payment['payment_status'] == 'Pending') {
       $session->pending();
+      $session->success();
       // ensure clientside messages are shown
       $session->setResponseItem('message', $session->getStatusMessage());
       return;

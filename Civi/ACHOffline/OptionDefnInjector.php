@@ -13,7 +13,7 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
  * Runs at priority -100 (AfformMetadataInjector is at the default 0, so
  * lower priority means we run later in Symfony EventDispatcher).
  *
- * @service civi.payflowpro.option_defn_injector
+ * @service civi.achoffline.option_defn_injector
  */
 class OptionDefnInjector extends AutoService implements EventSubscriberInterface {
 

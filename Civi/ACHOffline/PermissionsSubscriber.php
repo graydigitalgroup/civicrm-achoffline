@@ -39,6 +39,11 @@ class PermissionsSubscriber extends AutoService implements EventSubscriberInterf
       return;
     }
 
+    $request = $e->getApiRequest();
+    if ($request instanceof AbstractAction && !$request->getCheckPermissions()) {
+      return;
+    }
+
     $loggedInContactID = \CRM_Core_Session::getLoggedInContactID();
 
     // If no logged in contact, access is always denied

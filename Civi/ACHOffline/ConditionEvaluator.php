@@ -85,7 +85,7 @@ class ConditionEvaluator {
    *
    * @param int|null $contactId
    * @param int|null $paymentProcessorId
-   *   If NULL, checks across all PayflowPro processors site-wide.
+   *   If NULL, checks across all ACH offline processors site-wide.
    *   Better to over-show than under-show — empty-token-list UX is
    *   recoverable; silently hiding a valid choice is not.
    *
