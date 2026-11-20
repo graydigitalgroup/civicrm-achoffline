@@ -39,8 +39,8 @@ abstract class ACHOfflineCheckoutOptionBase implements CheckoutOptionInterface, 
     return $this->liveConnection['frontend_title'];
   }
 
-  public function getPaymentProcessorId(): int {
-    return $this->liveConnection['id'];
+  public function getPaymentProcessorId(bool $testMode = FALSE): ?int {
+    return $testMode ? $this->testConnection['id'] : $this->liveConnection['id'];
   }
 
   protected function getConnectionDetails(bool $testMode): array {
